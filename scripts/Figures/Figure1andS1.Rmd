@@ -1,0 +1,318 @@
+---
+title: "Figure1"
+author: "V.I.V. Gerretsen"
+date: "2024-05-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r colors}
+set.seed(42)
+library(Seurat)
+library(ggpubr)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(patchwork)
+library(scCustomize)
+library(scRepertoire)
+library(scCustomize)
+library(purrr)
+library(tidyverse)
+
+
+## backbone color codes
+Tissue.Col = c(
+  "LN" = '#00897b',
+  "tumor" = "#B80219"
+)
+
+### nsclc$All.Subsets
+All.Subsets.Col = c(
+  
+  #Blue
+  "CD8 T"="#12448F",
+  #"CD8 Texh"=="#00B4D8",
+ #"CD8 T IFN"="#0078B7",
+  #green
+  "CD4 Th"="#307153",
+  "CD4 Treg"="#B9DCC4",
+  "CD4 Tfh"="#52B689",
+  "T undefined"="#98CEB0",
+  #Red/orange
+  "Plasma B cell" ="#D80F16",
+  "B cell"="#db4f37",
+  "CD16+ NK" ="#F28B0D",
+  "NK"="#E75E0D",
+  "ILC"="#FBB914",
+  "Mast cell"="#E6CBB1",
+  #Green/light
+  "cDC2" = "#D7E293",
+  "cDC1"= "#E8E230",
+  "migDC" ="#7EB928",
+  #"#B0CB21"
+  #Dark purple
+  #"#241A43"
+  #Pink 
+  "Macrophage APOE" = "#644193",
+  #"#F5B1C0"
+  #"#F9CBD5"
+  "pDC" = "#A4173D",
+  "CD14+ Monocyte"= "#EA4E6E",
+  "CD16+ Monocyte"= "#EE738F",
+  "MoDC"  = "#E72270",
+  #Blue
+  #"#19527D"
+  #Purple pastel
+  "Macrophage LYZ" = "#C1B3D8",
+  #"#DAC4E0"
+  #Brown
+  "Stromal cell" = "#472C20",
+  "Proliferating"= "#AF8968",
+  #grey
+  "Cycling" = "#BDBDBD"
+)
+
+```
+
+## Fig 1C UMAP NSCLC
+
+You can also embed plots, for example:
+
+```{r umap, echo=FALSE}
+## load in data
+nsclc <- readRDS("~/R/nsclc.rds")
+
+
+DimPlot(nsclc, 
+        group.by = "All.Subsets", label = F,
+        cols = All.Subsets.Col, 
+        raster = F) + 
+  NoAxes()
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+## Fig 1D Canonical markers dotplot
+```{r dotplot, echo=FALSE}
+Idents(nsclc) <- nsclc$All.Subsets
+canon_markers <- c(
+# CD8
+'CD3D', 'CD3E',
+'CD8A', 'CD8B',
+#'IFI6',
+# CD4
+'CD4', 'FOXP3', 'CXCL13',
+# B cell
+ 'IGHG4', 'IGHG1', 'MZB1', 'CD79A','CD19',
+# NK cell
+'FCGR3A', 'KLRD1', 'NKG7', 'XCL1',
+#ILC
+'RORC', 'IL23R', 'KIT',
+# Mast Cell
+'GATA2','IL1RL1',
+# Monocyte
+'CD14', 'FCN1', 'S100A8', 'CX3CR1',
+# cDCs
+ 'CLEC10A', 'CD1C','XCR1', 'CLEC9A', 'LAMP3', 'FCER1G',
+# macrophage
+'APOE', 'C1QB', 'APOC1', 'SPP1', 'LYZ',
+#pDC
+'CLEC4C', 'JCHAIN', 'PLD4',
+# stromal
+'MGP', 'LUM',
+# proliferating
+'MKI67', 'STMN1'
+)
+
+nsclc <- ScaleData(nsclc, features = canon_markers)
+
+DotPlot(nsclc, features = rev(as.character(canon_markers)),
+        assay = "RNA", cols="RdBu") + coord_flip() +
+  theme(axis.text.y = element_text(size = 6), axis.text.x = element_text(size=6, angle=90, hjust=1)) +
+  scale_size(range = c(0.1,3)) +
+  xlab('Gene') +  ylab('Cluster') + 
+  ggtitle("Canonical Markers")
+
+```
+
+
+
+## Fig 1E barplots TDLN vs tumor
+```{r barplots, echo=FALSE}
+
+md <- nsclc@meta.data
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, tissue, All.Subsets) %>%
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true, tissue) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+
+# make a stacked bar chart of the frequency per patient tissue
+ggplot(cell_count, aes(x = patient_true, y = percentage, fill = All.Subsets)) +
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = All.Subsets.Col) +
+  facet_wrap(~ tissue) +
+  labs(
+    title = "Distribution of cluster frequency per patient and tissue type",
+    x = "Patient ID",
+    y = "Cells (%)",
+    fill = "Cell Types"
+  ) +
+  theme_minimal() + 
+  guides(fill=guide_legend(ncol=1))
+
+
+```
+
+
+## Fig 1F UMAP TDLN vs tumor
+```{r umap}
+# LN umap
+Idents(nsclc) <- nsclc$tissue
+Cluster_Highlight_Plot(nsclc, cluster_name = "LN", highlight_color = '#00897b') +
+     NoAxes()
+
+# Tumor umap
+Cluster_Highlight_Plot(nsclc, cluster_name = "tumor", highlight_color = '#B80219') +
+     NoAxes()
+
+```
+
+
+## Fig 1G - CD4/CD8 ratios
+
+```{r}
+# see graphpad and illustrator
+metadata <- nsclc@meta.data
+
+CD8 <- metadata %>%
+  filter(All.Subsets == "CD8 T")
+t1 <- as.data.frame(table(CD8$patient_true, CD8$tissue))
+colnames(t1) <- c("patient", "tissue", "CD8")
+t1$patient_tissue <- paste(t1$patient, t1$tissue, sep = "_")
+
+CD4 <- metadata %>%
+  filter(All.Subsets == "CD4 T" |
+           All.Subsets == "CD4 Treg" |
+           All.Subsets == "CD4 Tfh-like")
+t2 <- as.data.frame(table(CD4$patient_true, CD4$tissue))
+colnames(t2) <- c("patient", "tissue", "CD4")
+t2$patient_tissue <- paste(t2$patient, t2$tissue, sep = "_")
+
+CD4Treg <- metadata %>%
+  filter(All.Subsets == "CD4 Treg")
+t3 <- as.data.frame(table(CD4Treg$patient_true, CD4Treg$tissue))
+colnames(t3) <- c("patient", "tissue", "CD4Treg")
+t3$patient_tissue <- paste(t3$patient, t3$tissue, sep = "_")
+
+
+
+## create a dataframe with CD8, CD4 and CD4Treg
+dfs <- list(t1, t2, t3)
+merged_df <- Reduce(function(x, y) full_join(x, y, by = "patient_tissue"), dfs)
+selected_df <- merged_df %>%
+  select(patient_tissue, patient, tissue, CD8, CD4, CD4Treg)
+
+## add CD8/Treg ratio
+selected_df$CD8Tregratio <- selected_df$CD8/selected_df$CD4Treg
+
+
+# select only CD8Tregratio
+new_df <- selected_df %>%
+  select(patient, tissue, CD8Tregratio)
+new_df
+
+# pivot wide table with LN vs tumor
+df_wide <- new_df %>%
+  pivot_wider(
+    id_cols   = patient,
+    names_from  = tissue,
+    values_from = CD8Tregratio
+  )
+
+write.csv(df_wide, 'nsclc.CD8Tregratio.csv')
+## graphpad for figure
+
+```
+
+
+## Fig 1G2 - DC ratio in TDLN vs tumor
+```{r}
+DC <- metadata %>%
+  filter(All.Subsets == "cDC1"|
+           All.Subsets == "cDC2" |
+           All.Subsets == "moDC" |
+           All.Subsets == "migDC")
+t1 <- as.data.frame(table(DC$patient_true, DC$tissue))
+colnames(t1) <- c("patient", "tissue", "DC")
+t1$patient_tissue <- paste(t1$patient, t1$tissue, sep = "_")
+
+mac <- metadata %>%
+  filter(All.Subsets == "Macrophage APOE" |
+        All.Subsets == "Macrophage LYZ")
+t2 <- as.data.frame(table(mac$patient_true, mac$tissue))
+colnames(t2) <- c("patient", "tissue", "mac")
+t2$patient_tissue <- paste(t2$patient, t2$tissue, sep = "_")
+
+
+
+
+## create a dataframe with CD8, CD4 and CD4Treg
+dfs <- list(t1, t2)
+merged_df <- Reduce(function(x, y) full_join(x, y, by = "patient_tissue"), dfs)
+selected_df <- merged_df %>%
+  select(patient_tissue, patient.x, tissue.x, DC, mac)
+
+## add CD8/Treg ratio
+selected_df$DCmacratio <- selected_df$DC/selected_df$mac
+
+
+# select only CD8Tregratio
+new_df <- selected_df %>%
+  select(patient.x, tissue.x, DCmacratio)
+colnames(new_df) <- c('patient', 'tissue', 'DCmacratio')
+
+# pivot wide table with LN vs tumor
+df_wide <- new_df %>%
+  pivot_wider(
+    id_cols   = patient,
+    names_from  = tissue,
+    values_from = DCmacratio
+  )
+
+write.csv(df_wide, 'nsclc.DCmacratio.csv')
+```
+
+
+
+# SUPPLEMENTARY FIGURE 1
+
+## Fig S1A - gating strategy
+
+## Fig S1B Bar plots of patient-derived cells in TDLN and tumor, as identified via cell hashtags, relative to all cells. 
+```{r}
+ggplot(nsclc@meta.data, aes(x=tissue, fill=patient_true)) + geom_bar() + theme_classic()
+```
+
+
+## Fig S1C - UMAPs per patient
+```{r}
+par(mfrow=c(4, 5))
+DimPlot(nsclc, group.by = "All.Subsets", split.by = "patient_true", ncol = 4,
+        cols = All.Subsets.Col)
+```
+

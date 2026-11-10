@@ -1,0 +1,524 @@
+---
+title: "Figure2"
+author: "V. Gerretsen"
+date: "2025-12-10"
+output: html_document
+---
+
+## CD4 set up
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r set up}
+set.seed(42)
+library(Seurat)
+library(ggpubr)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(patchwork)
+library(scCustomize)
+library(scRepertoire)
+library(scCustomize)
+library(purrr)
+library(tidyr)
+library(ComplexUpset)
+library(stringr)
+library(EnhancedVolcano)
+
+T4 <- readRDS("~/R/T4.harmony.rds")
+
+T4tum <- subset(T4, subset = tissue == "tumor")
+T4LN <- subset(T4, subset = tissue == "LN")
+
+T4shared <- subset(T4, subset = overlap_2 == "Y")
+T4locexp <- subset(T4, subset = overlap_2 == "N" & Frequency_2 >1)
+
+
+col_T4 <- c(
+  
+  "Tcentral mem(1)"="#E49C85",
+  "Tcentral mem(2)"="#BFA38B",
+  "Tearly act"="#EDC7A9",
+  "Tcytotox(1)"="#B5728A",
+  "Tcytotox(2)"="#933B5B",
+  "Tcytotox(3)"="#7D314C",
+  "T HSP" = "#EC6159",
+  "CD4-CD8 mix" = "#BB535B",
+  "Treg(1)"="#EA8CAA",
+  "Treg(2)"="#8A6994",
+  "Texh-like"="#E83D66",
+  "Tfh"="#EF7D81")
+
+colorblind_vector <- colorRampPalette(rev(c("#0D0887FF", # single
+                                            "#7301A8FF", # small
+                                            "#BD3786FF", # medium
+                                            "#ED7953FF"))) # large
+Tissue.Col = c(
+  "LN" = '#00897b',
+  "tumor" = "#B80219"
+)
+
+```
+
+## Fig 2A - CD4 UMAP
+
+```{r}
+
+DimPlot(T4, label =F, group.by = "cluster_annotation", cols = col_T4) + NoAxes()
+
+```
+
+
+## Fig 2B - heatmap with canonical markers
+
+```{r heatmap} 
+library(pheatmap)
+allgenes <- c(
+  "TCF", "SELL", "LEF1",
+  "NOSIP", "GIMAP7", "LTB", "CCR7",
+  "S100A4",
+  "NR4A2", "ANXA1", "TNFAIP3", "CXCR4",
+  "CCL5", "GZMA", "LGALS3", "IFNG",
+  "GZMK", "NKG7", "GNLY",
+  "NEAT1", 
+  "HSPA1B", "HSPA1A", "EGR1", "TNFRSF4",
+  "FOXP3", "TIGIT", "CTLA4", "IKZF2", "CD27", "IL2RB",
+"DUSP4", "TNFRSF18","CXCR6",
+  "TOX", "TOX2", "PDCD1", 
+  "CXCL13",  "LAG3", "HAVCR2")
+
+avg_expr <- AggregateExpression(object = T4, # condsider AverageExpression
+                                group.by = "cluster_annotation") # change for annotation
+avg_expr_matrix <- avg_expr$RNA
+subset_matrix <- avg_expr_matrix[rownames(avg_expr_matrix) %in% allgenes, ]
+
+row_names <- rownames(avg_expr_matrix)
+
+ordered_indices <- order(match(row_names, allgenes))
+
+subset_matrix <- avg_expr_matrix[ordered_indices, ]
+subset_matrix <- subset_matrix[rownames(subset_matrix) %in% allgenes, ]
+
+cal_z_score <- function(x){
+  (x - mean(x)) / sd(x)
+}
+
+data_subset_norm <- t(apply(subset_matrix, 1, cal_z_score))
+
+pheatmap(data_subset_norm,
+         #color = hcl.colors(50, "RdGy", rev = T),
+         #order_color = NA,
+         #scale = "row",
+         #cutree_rows = F,
+         cellwidth = 12,
+         #cellheight = 15,
+         cluster_rows = F,
+         cluster_cols = F)
+```
+
+
+## Fig 2C1 - cluster distribution bar plot per patient
+```{r}
+md <- T4@meta.data
+# create a table with cell counts per cluster per patient and tissue
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, tissue, cluster_annotation) %>%
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true, tissue) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+
+# make a stacked bar chart of the frequency per patient tissue
+ggplot(cell_count, aes(x = patient_true, y = percentage, fill = cluster_annotation)) +
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_T4) +
+  facet_wrap(~ tissue) +
+  labs(
+    # title = "Distribution of cluster frequency per patient and tissue type",
+    x = "Patient",
+    y = "Percentage",
+    fill = "CD4 cluster"
+  ) +
+  theme_minimal()
+
+
+## Barplot per tissue (on average)
+## remove NAs (if patient_true = NA)
+cell_count <- T4@meta.data %>%
+  filter(!is.na(patient_true))
+
+cell_count <- cell_count %>% 
+  group_by(tissue, cluster_annotation) %>% 
+  summarise(n = n())
+
+cell_count <- cell_count %>% mutate(percentage = n / sum(n) * 100)
+
+
+#rename LN to TDLN
+cell_count$tissue[cell_count$tissue == "LN"] <- "TDLN"
+
+# barplot distribution per tissue
+ggplot(cell_count, aes(x = tissue, y = percentage, fill = cluster_annotation)) +
+  geom_bar(stat = "identity", width = 0.5)+ 
+  scale_fill_manual(values = col_T4) +
+  theme_classic()+
+  guides(fill=guide_legend(title="Cell Types")) + 
+  ylab("percentage") +
+  xlab("")+ 
+  guides(fill=guide_legend(ncol=1))
+
+```
+
+## Fig 2C1 - statistics on differences
+```{r}
+df2 = md %>%
+  count(patient_true, tissue, cluster_annotation) %>%
+  group_by(patient_true, tissue) %>%
+  mutate(percent = prop.table(n) * 100) %>%
+  filter(!str_detect(patient_true, "NA")) %>%
+  ungroup()
+
+statistics = df2 %>%
+  pivot_wider(id_cols = c(patient_true, cluster_annotation), names_from = tissue, values_from = percent) %>%
+  group_by(cluster_annotation) %>%
+  summarise(p_value = wilcox.test(LN, tumor, paired = TRUE)$p.value, 
+            median_LN = median(LN, na.rm = TRUE), median_tumor = median(tumor, na.rm = TRUE), .groups = "drop") %>%
+  mutate(p_adj = p.adjust(p_value, method = "fdr"),
+         signif = case_when(
+           p_adj < 0.001 ~ "***",
+           p_adj < 0.01 ~ "**",
+           p_adj < 0.05 ~ "*",
+           TRUE ~ ""
+         ))
+
+print(statistics)
+
+```
+
+## Fig 2C2 - split UMAP
+```{r}
+## UMAP split by tissue
+DimPlot(T4, split.by = "tissue", cols = col_T4) + NoLegend() + NoAxes()
+```
+
+
+## Fig 2D - volcano plot for Tregs
+### LN vs tumor markers in Tregs (both Treg(1) and Treg(2) together)
+
+```{r}
+all_treg_cells = subset(T4, subset = cluster_annotation == c("Treg(1)","Treg(2)"))
+dge_all_t_ln_vs_tumor = FindMarkers(all_treg_cells, ident.1 = "LN", ident.2 = "tumor", group.by = "tissue", min.pct = 0.25, logfc.treshold = 0.25)
+
+labels <- rownames(dge_all_t_ln_vs_tumor)
+
+# Remove these labels from being shown
+labels[labels %in% c("MYADM", "ZNRF1", "DDIT", "PLIN2", "IER5")] <- ""
+
+
+# add new labels
+genes_to_label <- c(
+  "JUND", "BATF", "ICOS", "NR4A2", "TNFRSF4",
+  "JUNB", "TCF7", "TIGIT", "SOCS1",
+  "DUSP4", "HSPA1B", "TNAIP3",
+  "DNAJA1", "NKFBIA", "RGS", "JUN", 
+  "BAG3", "EGR1",
+  "HSPA8", "FOSB", "CTLA4", 
+  "SELL", "IL16", "CCR7", "LEF1"
+)
+
+EnhancedVolcano(
+  dge_all_t_ln_vs_tumor,
+  lab = rownames(dge_all_t_ln_vs_tumor),
+  selectLab = genes_to_label,
+  x = "avg_log2FC",
+  y = "p_val_adj",
+  FCcutoff = 0.5,
+  drawConnectors = TRUE,
+  arrowheads = FALSE,
+  widthConnectors = 0.7,
+  colConnectors = "black",
+  typeConnectors = "closed",
+  labSize = 5,
+  lengthConnectors = unit(0.2, "npc")
+) +
+  ggtitle("all Tregs, TDLN vs. tumor")
+
+```
+
+
+## Fig 2E1 - clonal expansion in CD4 UMAP
+```{r}
+#remove cells without TCR/patient info)
+T4dim <- subset(T4, subset =! is.na(T4@meta.data$cloneType_new))
+
+DimPlot(T4, group.by = "cloneType_new",
+        pt.size=0.5) +
+        #split.by = "tissue") +
+  scale_color_manual(values = colorblind_vector(4), na.value="#e9e9e9") + 
+  ggtitle("Clonal expansion in CD4") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+```
+
+## Fig 2E2 - clone stacked bar plots per tissue 
+```{r}
+clonalOccupy(T4, 
+             x.axis = "tissue") +ggtitle('CD4 clones') + ylim(0,4100) +
+  scale_fill_manual(values = c(
+    "Single (0 < X <= 1)" = "#0D0887FF", # single
+    "Small (1 < X <= 5)" =  "#7301A8FF", # small
+    "Medium (5 < X <= 20)" = "#BD3786FF", # medium
+    "Large (20 < X <= 100)" = "#ED7953FF") # large
+  )
+```
+
+## Fig 2E3 - clone numbers in bar graphs
+```{r}
+df <- T4@meta.data %>%
+  select(patient_true, tissue, Clonotype_patient, cloneType_new)
+
+result <- df %>%
+  filter(!is.na(patient_true)) %>%  # Remove rows with NA in patient_true
+  group_by(tissue, cloneType_new) %>%
+  summarise(unique_clones = n_distinct(Clonotype_patient), .groups = "drop") %>%  # Count unique clonotypes per tissue
+  arrange( tissue, cloneType_new)  # Optional: sort for readability
+
+# View result
+View(result)
+# write.csv(result, 'CD4.clonetype.per.tissue.csv')
+```
+
+## Fig 2F - UMAPs per tissue: locally expanded and shared clones
+```{r}
+DimPlot(T4locexp, label =F, group.by = "cluster_annotation", cols = col_T4, split.by = "tissue") + NoAxes()
+
+DimPlot(T4shared, label =F, group.by = "cluster_annotation", cols = col_T4, split.by = "tissue") + NoAxes()
+
+```
+
+
+## Fig 2G - absolute / relative distribution of shared vs locexp CD4 T cells per cluster
+```{r}
+col_overlap <- c("Y" = "#EC5E27", "N" = "#403D39", "NA" = "grey")
+
+order <- c("Y", "N", "NA")
+
+md <- T4@meta.data
+# create a table with shared/locexp per cluster
+cell_count <- unique(md$cluster_annotation) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(cluster_annotation == p) %>%
+      group_by(cluster_annotation, overlap_2) %>% ## add tissue if split by tissue
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(cluster_annotation) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+# make a stacked bar chart of the proportion per patient tissue
+ggplot(cell_count, aes(x = cluster_annotation, y = percentage, fill = factor(overlap_2, order))) + ## factor + order to adjust order
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_overlap) +
+  # facet_wrap(~ tissue) +
+  labs(
+    # title = "Distribution of cluster frequency per patient and tissue type",
+    x = "Cluster",
+    y = "Percentage",
+    fill = "clonotype sharing"
+  ) +
+  theme_minimal()
+
+## Figure created in Graphpad
+```
+
+
+
+# SUPPLEMENTARY FIGURE 2
+
+## Fig S2A - dotplot met top 3 markers
+
+```{r dotplot}
+# Figure 5 Dotplot
+DGE = FindAllMarkers(T4, only.pos = TRUE, logfc.threshold = 0.25, min.pct = 0.25)
+top3 = DGE %>%
+  group_by(cluster) %>%
+  top_n (n = 3, wt = avg_log2FC) %>%
+  arrange(cluster, desc(avg_log2FC))
+
+features_unique = unique(top3$gene)
+DotPlot(T4, features = features_unique) + RotatedAxis()
+
+```
+
+
+## Fig S2B - absolute cluster distribution bar plot per patient
+```{r}
+
+md <- T4@meta.data
+
+# create a table with cell counts per cluster per patient and tissue
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, tissue, cluster_annotation) %>%
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true, tissue) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+
+
+# make a stacked bar chart of the cell count per patient tissue (optional)
+ggplot(cell_count, aes(x = patient_true, y = n, fill = cluster_annotation)) +
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_T4) +
+  facet_wrap(~ tissue) +
+  labs(
+    title = "Distribution of cells per cluster per patient and tissue type",
+    x = "Patient",
+    y = "Cells",
+    fill = "CD4 cluster"
+  ) +
+  theme_minimal()
+
+```
+
+### Fig S2C - Tregs gene expression TDLN vs tumor
+```{r}
+## Treg specific signatures
+VlnPlot(T4, 
+        'CTLA4', 
+        idents = c("Treg(1)", "Treg(2)"),
+        split.by = "tissue",
+        cols = Tissue.Col, pt.size = 0)
+
+VlnPlot(T4, 
+        'ICOS', 
+        idents = c("Treg(1)", "Treg(2)"),
+        split.by = "tissue",
+        cols = Tissue.Col, pt.size = 0)
+
+VlnPlot(T4, 
+        'TNFRSF18', # GITR
+        idents = c("Treg(1)", "Treg(2)"),
+        split.by = "tissue",
+        cols = Tissue.Col, pt.size = 0)
+
+VlnPlot(T4, 
+        'ENTPD1', 
+        idents = c("Treg(1)", "Treg(2)"),
+        split.by = "tissue",
+        cols = Tissue.Col, pt.size = 0)
+
+VlnPlot(T4, 
+        'TNFRSF4', # OX40
+        idents = c("Treg(1)", "Treg(2)"),
+        split.by = "tissue",
+        cols = Tissue.Col, pt.size = 0)
+
+VlnPlot(T4, 
+        'TIGIT', 
+        idents = c("Treg(1)", "Treg(2)"),
+        split.by = "tissue",
+        cols = Tissue.Col, pt.size = 0)
+
+```
+
+
+## Fig S2D - clonal distribution per cluster per tissue
+```{r} 
+## 
+as.factor(T4LN@meta.data$cloneType_new) -> T4LN@meta.data$cloneSize
+clonalOccupy(T4LN, 
+             x.axis = "cluster_annotation") +ggtitle('CD4 locally expanded clones') + ylim(0,6100)+
+  scale_fill_manual(values = c(
+    "Single (0 < X <= 1)" = "#0D0887FF", # single
+    "Small (1 < X <= 5)" =  "#7301A8FF", # small
+    "Medium (5 < X <= 20)" = "#BD3786FF", # medium
+    "Large (20 < X <= 100)" = "#ED7953FF") # large
+  )
+
+as.factor(T4tum@meta.data$cloneType_new) -> T4tum@meta.data$cloneSize
+clonalOccupy(T4tum, 
+             x.axis = "cluster_annotation") +ggtitle('CD4 shared clones') + ylim(0,6100)+
+  scale_fill_manual(values = c(
+    "Single (0 < X <= 1)" = "#0D0887FF", # single
+    "Small (1 < X <= 5)" =  "#7301A8FF", # small
+    "Medium (5 < X <= 20)" = "#BD3786FF", # medium
+    "Large (20 < X <= 100)" = "#ED7953FF") # large
+  )
+
+```
+
+
+## Fig S2E and Fig S2F - upset plot
+```{r upset}
+
+metadata <-  as.data.frame(T4@meta.data)
+# Create a new data frame to store the binary values
+binary_matrix <- data.frame(matrix(NA, nrow = nrow(metadata), ncol = length(levels(metadata$cluster_annotation))))
+
+# Set column names based on the levels of CD8.Cell.Types
+colnames(binary_matrix) <- levels(metadata$cluster_annotation)
+
+# Populate the binary matrix
+for (i in 1:length(levels(metadata$cluster_annotation))) {
+  binary_matrix[, i] <- metadata$cluster_annotation == levels(metadata$cluster_annotation)[i]
+}
+
+# Convert TRUE/FALSE to 1/0
+binary_matrix <- as.data.frame(lapply(binary_matrix, as.integer))
+
+# Add the binary matrix columns to the original metadata data frame
+metadata <- cbind(metadata, binary_matrix)
+
+# set CD8 Cell Types levels as cluster
+cluster = c(levels(T4@meta.data$cluster_annotation))
+# create table 'clones' with all labeled clones (Clonotype_2) with the distribution over the cell clusters 
+clones <- as.data.frame.matrix(table(metadata$Clonotype_patient, metadata$cluster_annotation))
+cluster = colnames(clones)
+
+
+## locally expanded only
+metadata2 <- metadata %>%
+  filter(overlap_2== "N") %>%
+  filter(Frequency_2>1)
+clones <- as.data.frame.matrix(table(metadata2$Clonotype_patient, metadata2$cluster_annotation))
+cluster = colnames(clones)
+
+upset(clones, cluster, name='cluster', width_ratio=0.1,
+      wrap = TRUE,
+      n_intersections = 20) +   # top 20 van voorkomende intersections 
+  ggtitle("Top 20 intersections of locally expanded clones")
+
+
+## locally expanded only
+metadata3 <- metadata %>%
+  filter(overlap_2== "Y") %>%
+  filter(Frequency_2>1)
+clones <- as.data.frame.matrix(table(metadata3$Clonotype_patient, metadata3$cluster_annotation))
+cluster = colnames(clones)
+
+upset(clones, cluster, name='cluster', width_ratio=0.1,
+      wrap = TRUE,
+      n_intersections = 20) +   # top 20 van voorkomende intersections 
+  ggtitle("Top 20 intersections of shared clones")
+```

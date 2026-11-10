@@ -1,0 +1,694 @@
+---
+title: "Figure4"
+author: "V. Gerretsen"
+date: "2025-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(scuttle)
+library(Seurat)
+library(pheatmap)
+library(ComplexUpset)
+library(dplyr)
+library(grid)
+library(scCustomize)
+library(stringr)
+library(slingshot)
+library(monocle3)
+
+T8 <- readRDS("~/R/T8.rds")
+T8tum <- subset(T8, subset = tissue == "tumor")
+T8LN <- subset(T8, subset = tissue == "LN")
+
+
+col_T8 = c(
+  "Tcentral mem(1)" =  "#edba40",
+  "Tearly act(1)" = "#e28c33",
+  "Teff(1)"  = "#e0652b",
+  "Tcentral mem(2)" = "#AED140",
+  "Tearly act(2)" =  "#2DA049",
+  "Teff(2)" = "#1D6517",
+  "Tlate act" = "#a9725A",
+  "Teff(3)" = "#009688",
+  "Tcytotoxic" =  "#00bcd4", 
+  "Texh(1)"= "#03a9f4" ,
+  "Texh(2)" = "#2196f3",
+  "Texh(3)" = "#3f51b5",
+  "Texh(4)" = "#673ab7" ,
+  "Tprolif" = "#9c27b0",
+  "Tmisc"= "#788176", 
+  "Tc17/MAIT" = "#f44336"
+) 
+
+colorblind_vector <- colorRampPalette(rev(c("#0D0887FF", # single
+                                            "#7301A8FF", # small
+                                            "#BD3786FF", # medium
+                                            "#ED7953FF", # large
+                                            "#FDC926FF", # hyperexp
+                                            "#F0F921FF")))# ultraexp
+
+colorblind_vector_tum <- colorRampPalette(rev(c("#7301A8FF", # small
+                                            "#BD3786FF", # medium
+                                            "#ED7953FF", # large
+                                            "#FDC926FF", # hyperexp
+                                            "#F0F921FF")))# ultraexp
+
+colorblind_vector_locexp <- colorRampPalette(rev(c("#7301A8FF", # small
+                                                "#BD3786FF", # medium
+                                                "#ED7953FF", # large
+                                               "#FDC926FF", # hyperexp
+                                            "#F0F921FF")))# ultraexp
+
+colorblind_vector_sh <- colorRampPalette(rev(c("#7301A8FF", # small
+                                                "#BD3786FF", # medium
+                                                "#ED7953FF", # large
+                                               "#FDC926FF"))) # hyperexp
+```
+
+
+
+
+## Figure 4 - upset plot settings
+
+```{r upset settings}
+metadata <-  as.data.frame(T8@meta.data)
+# Create a new data frame to store the binary values
+binary_matrix <- data.frame(matrix(NA, nrow = nrow(metadata), ncol = length(levels(metadata$CD8.Cell.Types))))
+
+# Set column names based on the levels of CD8.Cell.Types
+colnames(binary_matrix) <- levels(metadata$CD8.Cell.Types)
+
+# Populate the binary matrix
+for (i in 1:length(levels(metadata$CD8.Cell.Types))) {
+  binary_matrix[, i] <- metadata$CD8.Cell.Types == levels(metadata$CD8.Cell.Types)[i]
+}
+
+# Convert TRUE/FALSE to 1/0
+binary_matrix <- as.data.frame(lapply(binary_matrix, as.integer))
+
+# Add the binary matrix columns to the original metadata data frame
+metadata <- cbind(metadata, binary_matrix)
+
+# set CD8 Cell Types levels as cluster
+cluster = colnames(metadata[c(97:112)])
+# create table 'clones' with all labeled clones (Clonotype_2) with the distribution over the cell clusters 
+clones <- as.data.frame.matrix(table(metadata$Clonotype_2, metadata$CD8.Cell.Types))
+cluster = colnames(clones)
+
+```
+
+
+## Fig 4A1 - Pseudotime trajectory analysis - slingshot
+```{r slingshot}
+data <- T8
+
+# Save the objects as separate matrices for input in slingshot
+dimred <- data@reductions$umap@cell.embeddings
+clustering <- data$CD8.Cell.Types
+counts <- as.matrix(data@assays$RNA@counts[data@assays$RNA@var.features, ])
+
+
+# Run default Slingshot lineage identification
+#set.seed(1)
+lineages <- getLineages(data = dimred, clusterLabels = clustering)
+lineages <- as.SlingshotDataSet(lineages)
+
+
+# Plot the lineages
+par(mfrow = c(1, 2))
+#plot(dimred[, 1:2], col = mycolors[clustering], cex = 0.5, pch = 16)
+plot(dimred[, 1:2], col = col_T8[clustering], cex = 0.5, pch = 16)
+for (i in levels(clustering)) {
+  text(mean(dimred[clustering == i, 1]), mean(dimred[clustering == i, 2]), labels = i, font = 2)
+}
+#plot(dimred[, 1:2], col = mycolors[clustering], cex = 0.5, pch = 16)
+plot(dimred[, 1:2], col = col_T8[clustering], cex = 0.5, pch = 16)
+lines(lineages, lwd = 1, col = "black")
+
+```
+
+
+## Fig 4A2 - Pseudotime trajectory analysis - monocle
+```{r monocle3}
+T8small <- subset(T8, downsample = 5000)
+
+cds <- SeuratWrappers::as.cell_data_set(T8small)
+cds <- cluster_cells(cds, resolution = 1e-4, reduction_method = 'UMAP')
+
+cds <- learn_graph(cds, use_partition = F, verbose = T)
+cds <- order_cells(cds, reduction_method = "UMAP")
+
+## OR
+cds <-  readRDS("~/R/cds1e4.rds") # load the cds object with resolution 1e-4
+cds_order_1 <- order_cells(cds, root_pr_nodes='Y_1', reduction_method = "UMAP")
+
+
+p1 <- plot_cells(cds, color_cells_by = "cluster", show_trajectory_graph = FALSE)
+p2 <- plot_cells(cds, color_cells_by = "partition", show_trajectory_graph = FALSE)
+wrap_plots(p1, p2)
+
+plot_cells(cds_order_1,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5,
+           trajectory_graph_segment_size =2,
+           trajectory_graph_color = "black", # black line
+           alpha = 0.7,
+           rasterize = T) + # cells more transparent 
+  scale_color_viridis_c(
+    option = "C",      # Or "D" for standard viridis
+    begin = 0.25,       # Starts the color map at a lighter value (removes black/dark blue)
+    end = 1,         # Ends slightly before pure yellow for better contrast
+    na.value = "white" # Keeps out-of-range cells light and visible
+  )
+
+```
+
+## Figure 4B - Upset plot clusters related to exhausted clusters
+```{r clones and exhaustion}
+metadata2 <- metadata %>%
+  filter(Frequency_2 >1) #%>%
+ # filter(tissue == "tumor")
+clones <- as.data.frame.matrix(table(metadata2$Clonotype_2, metadata2$CD8.Cell.Types))
+cluster = colnames(clones)
+
+clones_exh <- clones %>%
+  filter(`Texh(1)`>0 | `Texh(2)`>0 | `Texh(3)`>0 | `Texh(4)`>0)
+
+upset(clones_exh, cluster, name='cluster combination',
+      n_intersections = 20, # top 20 van voorkomende intersections
+      width_ratio=0.1,
+      wrap = T) + 
+  ggtitle("Top 20 intersections of clones related to Texh cells")
+
+
+```
+
+## Figure 4C - Individual clones with cells related to exhausted cells
+
+```{r individual clones hyperexpanded}
+
+Idents(T8) <- "Clonotype_2"
+Idents(T8) <- "Clonotype_1"
+
+# Texh1 top
+Texh1 <- WhichCells(T8, idents = "67_clonotype12609")  # enkel Texh + prolif
+Texh2 <- WhichCells(T8, idents = "67_clonotype12691")  # enkel Texh + route 1
+Texh3 <- WhichCells(T8, idents = "67_clonotype12653")  # enkel Texh + route 1  
+
+
+## back-ups
+#Texh1 <- WhichCells(T8, idents = "37_clonotype12534")
+#Texh2 <- WhichCells(T8, idents = "38_clonotype13334") ## Texh1 #2 ### deze ook kiezen
+#Texh3 <- WhichCells(T8, idents = "20_clonotype47597") ## voorbeeld #2
+#Texh1 <- WhichCells(T8, idents = "37_clonotype2891") 
+#Texh1 <- WhichCells(T8, idents = "38_clonotype13158") 
+#Texh1 <- WhichCells(T8, idents = "72_clonotype54363")
+#Texh1 <- WhichCells(T8, idents = "37_clonotype12534")
+#Texh1 <- WhichCells(T8, idents = "20_clonotype47597")
+
+p1 <- DimPlot(T8tum, label=F, pt.size = 1, reduction = "umap", group.by = "CD8.Cell.Types",
+        cells.highlight= Texh1, sizes.highlight = 5, cols.highlight = "#1570AC", cols= "lightgrey") + ggtitle("p67 clone#12609") + NoLegend() + NoAxes()
+p2 <- DimPlot(T8tum, label=F, pt.size = 1, reduction = "umap", group.by = "CD8.Cell.Types",
+        cells.highlight= Texh2, sizes.highlight = 5, cols.highlight = "#ED7953FF", cols= "lightgrey") + ggtitle("p67 clone#12691") + NoLegend() + NoAxes()
+p3 <- DimPlot(T8tum, label=F, pt.size = 1, reduction = "umap", group.by = "CD8.Cell.Types",
+        cells.highlight= Texh3, sizes.highlight = 5, cols.highlight = "darkgreen", cols= "lightgrey") + ggtitle("p67 clone#12653") + NoLegend() + NoAxes()
+
+plot(p1)
+plot(p2)
+plot(p3)
+
+```
+
+
+## Figure 4D - UMAP expanded locexp and shared
+```{r UMAPs}
+T8shared <- subset(T8, subset = overlap_2 == "Y")
+T8locexp <- subset(T8, subset = overlap_2 == "N" & Frequency_2 >1)
+
+DimPlot(T8locexp, group.by = "cloneType_2",
+        pt.size=1) +
+  scale_color_manual(values = colorblind_vector_locexp (5), na.value="#e9e9e9") + 
+  ggtitle("locally expanded") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+
+
+DimPlot(T8shared, group.by = "cloneType_2",
+        pt.size=1) +
+  scale_color_manual(values = colorblind_vector_sh(5), na.value="#e9e9e9") + 
+  ggtitle("shared") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+```
+
+
+## Figure 4E1 - Clonal distribution shared clones -barplot
+```{r shared vs locexp clones}
+
+T8shared <- subset(T8, subset = overlap_2 == "Y")
+T8locexp <- subset(T8, subset = overlap_2 == "N" & Frequency_2 >1)
+
+clonalOccupy(T8locexp, 
+             x.axis = "tissue", label = F) + ylim(0,11000)
+clonalOccupy(T8shared, 
+             x.axis = "tissue", label = F) + ylim(0,11000)
+
+## NB colorcode in illustrator aangepast
+```
+
+
+## Figure 4E2 - number of clones per shared/loc exp per tissue
+```{r}
+
+## loc exp number of clones for stacked bar plot
+df <- T8locexp@meta.data %>%
+  select(patient_true, tissue, Clonotype_2, cloneType_2)
+result <- df %>%
+  filter(!is.na(patient_true)) %>%  # Remove rows with NA in patient_true
+  group_by(tissue, cloneType_2) %>%
+  summarise(unique_clones = n_distinct(Clonotype_2), .groups = "drop") %>%  # Count unique clonotypes per tissue
+  arrange( tissue, cloneType_2)  # Optional: sort for readability
+# View result
+View(result)
+# write.csv(result, 'CD8locexp.clonetype.per.tissue.csv')
+
+
+## shared number of clones for stacked bar plot
+df <- T8locexp@meta.data %>%
+  select(patient_true, tissue, Clonotype_2, cloneType_2)
+result <- df %>%
+  filter(!is.na(patient_true)) %>%  # Remove rows with NA in patient_true
+  group_by(tissue, cloneType_2) %>%
+  summarise(unique_clones = n_distinct(Clonotype_2), .groups = "drop") %>%  # Count unique clonotypes per tissue
+  arrange( tissue, cloneType_2)  # Optional: sort for readability
+# View result
+View(result)
+# write.csv(result, 'CD8shared.clonetype.per.tissue.csv')
+
+```
+
+## Figure 4F - Clonal distribution shared clones - upset plot
+```{r shared clones} 
+metadata3 <- metadata %>%
+  filter(overlap_2== "Y") %>%
+  filter(Frequency_2>1)
+clones <- as.data.frame.matrix(table(metadata3$Clonotype_2, metadata3$CD8.Cell.Types))
+cluster = colnames(clones)
+
+upset(clones, cluster, name='cluster', width_ratio=0.1,
+      wrap = TRUE,
+      n_intersections = 20) +   # top 20 van voorkomende intersections 
+  ggtitle("Top 20 intersections of shared clones")
+
+```
+
+
+## Figure 4G1 - Route 1 and 2 highlighted in UMAP
+```{r, route 1 and route 2 on UMAP}
+
+Idents(T8) <- "CD8.Cell.Types"
+Tearly1LN <- WhichCells(object = T8LN, idents = "Tearly act(1)")
+Teff1LN <- WhichCells(object = T8LN, idents = "Teff(1)")
+Tearly2LN <- WhichCells(object = T8LN, idents = "Tearly act(2)")
+Teff2LN <- WhichCells(object = T8LN, idents = "Teff(2)")
+
+Tearly1t <- WhichCells(object = T8tum, idents = "Tearly act(1)")
+Teff1t <- WhichCells(object = T8tum, idents = "Teff(1)")
+Tearly2t <- WhichCells(object = T8tum, idents = "Tearly act(2)")
+Teff2t <- WhichCells(object = T8tum, idents = "Teff(2)")
+
+
+route1LN <- list("Tearly(1)"  = Tearly1LN,
+              "Teff(1)" = Teff1LN)
+
+route2LN <- list("Tearly(2)"  = Tearly2LN,
+               "Teff(2)" = Teff2LN)
+
+route1t <- list("Tearly(1)"  = Tearly1t,
+                 "Teff(1)" = Teff1t)
+
+route2t <- list("Tearly(2)"  = Tearly2t,
+                 "Teff(2)" = Teff2t)
+r1LN <- Cell_Highlight_Plot(seurat_object = T8, cells_highlight = route1LN, pt.size = 2, highlight_color = c("#e28c33", "#e0652b")) +NoAxes()
+r1t <- Cell_Highlight_Plot(seurat_object = T8, cells_highlight = route1t, pt.size = 2, highlight_color = c("#e28c33", "#e0652b")) +NoAxes()
+
+r2LN <- Cell_Highlight_Plot(seurat_object = T8, cells_highlight = route2LN, pt.size = 2, highlight_color = c("#2DA049", "#1D6517")) +NoAxes()
+r2t <- Cell_Highlight_Plot(seurat_object = T8, cells_highlight = route2t, pt.size = 2, highlight_color = c("#2DA049", "#1D6517")) +NoAxes()
+
+plot(r1LN|r1t)
+plot(r2LN|r2t)
+
+```
+
+
+## Figure 4G2 - Route 1 and 2 shared clones examples
+```{r, individual clones on umap }
+
+Idents(T8) <- Idents(T8) <- "Clonotype_2"
+r1shared1 <- WhichCells(T8, idents = "38_clonotype3616") 
+r1shared2 <- WhichCells(T8, idents = "67_clonotype34036") 
+r2shared1 <- WhichCells(T8, idents = "37_clonotype2720") 
+r2shared2 <- WhichCells(T8, idents = "50_clonotype5946")  
+
+ps1 <- DimPlot(T8, label=F,  reduction = "umap", group.by = "CD8.Cell.Types",
+                       cells.highlight= r1shared1, sizes.highlight = 3, cols.highlight = "#ED7953FF", cols= "lightgrey", split.by = "tissue") + 
+  ggtitle("p38") + NoLegend() + NoAxes()
+
+ps2 <- DimPlot(T8, label=F,  reduction = "umap", group.by = "CD8.Cell.Types",
+                       cells.highlight= r1shared2, sizes.highlight = 3, cols.highlight = "#ED7953FF", cols= "lightgrey", split.by = "tissue") + 
+  ggtitle("p67") + NoLegend() + NoAxes()
+
+ps3 <- DimPlot(T8, label=F,  reduction = "umap", group.by = "CD8.Cell.Types",
+                       cells.highlight= r2shared1, sizes.highlight = 3, cols.highlight = "darkgreen", cols= "lightgrey", split.by = "tissue") + 
+  ggtitle("p37") + NoLegend() + NoAxes()
+
+ps4 <- DimPlot(T8, label=F,  reduction = "umap", group.by = "CD8.Cell.Types",
+                       cells.highlight= r2shared2, sizes.highlight = 3, cols.highlight = "darkgreen", cols= "lightgrey", split.by = "tissue") + 
+  ggtitle("p50") + NoLegend() + NoAxes()
+
+plot(ps1)
+plot(ps2)
+plot(ps3)
+plot(ps4)
+
+
+```
+
+
+
+## Figure 4H - alluvialplots
+
+```{r}
+# Circos plot between tissues
+library(circlize)
+library(ComplexHeatmap)
+library(tibble)
+
+col_T8_split = c(
+  "LN_Tcentral mem(1)" =  "#edba40",
+  "LN_Tearly act(1)" = "#e28c33",
+  "LN_Teff(1)"  = "#e0652b",
+  "LN_Tcentral mem(2)" = "#AED140",
+  "LN_Tearly act(2)" =  "#2DA049",
+  "LN_Teff(2)" = "#1D6517",
+  "LN_Tlate act" = "#a9725A",
+  "LN_Teff(3)" = "#009688",
+  "LN_Tcytotoxic" =  "#00bcd4", 
+  "LN_Texh(1)"= "#03a9f4" ,
+  "LN_Texh(2)" = "#2196f3",
+  "LN_Texh(3)" = "#3f51b5",
+  "LN_Texh(4)" = "#673ab7" ,
+  "LN_Tprolif" = "#9c27b0",
+  "LN_Tmisc"= "#788176", 
+  "LN_Tc17/MAIT" = "#f44336",
+  
+  "Tumor_Tcentral mem(1)" =  "#edba40",
+  "Tumor_Tearly act(1)" = "#e28c33",
+  "Tumor_Teff(1)"  = "#e0652b",
+  "Tumor_Tcentral mem(2)" = "#AED140",
+  "Tumor_Tearly act(2)" =  "#2DA049",
+  "Tumor_Teff(2)" = "#1D6517",
+  "Tumor_Tlate act" = "#a9725A",
+  "Tumor_Teff(3)" = "#009688",
+  "Tumor_Tcytotoxic" =  "#00bcd4", 
+  "Tumor_Texh(1)"= "#03a9f4" ,
+  "Tumor_Texh(2)" = "#2196f3",
+  "Tumor_Texh(3)" = "#3f51b5",
+  "Tumor_Texh(4)" = "#673ab7" ,
+  "Tumor_Tprolif" = "#9c27b0",
+  "Tumor_Tmisc"= "#788176", 
+  "Tumor_Tc17/MAIT" = "#f44336"
+) 
+
+meta <- T8@meta.data
+meta$Clonotype_patient <- meta$Clonotype_2
+meta$cluster_annotation <- meta$CD8.Cell.Types
+
+
+# Circos plot between tissues
+meta_unique = meta %>%
+  select(Clonotype_patient, cluster_annotation, tissue) %>%
+  distinct() %>%
+  filter(!str_detect(Clonotype_patient, "NA"))
+
+meta_unique$cluster_annotation = as.character(meta_unique$cluster_annotation)
+ln_clones = meta_unique %>%
+  filter(tissue == "LN") %>%
+  group_by(cluster_annotation) %>%
+  summarise(clones = list(unique(Clonotype_patient))) %>%
+  deframe()
+
+tumor_clones = meta_unique %>%
+  filter(tissue == "tumor") %>%
+  group_by(cluster_annotation) %>%
+  summarise(clones = list(unique(Clonotype_patient))) %>%
+  deframe()
+
+ln_names = names(ln_clones)
+tumor_names = names(tumor_clones)
+
+mat = outer(ln_names, tumor_names, Vectorize(function(a,b){
+  length(intersect(ln_clones[[a]], tumor_clones[[b]]))
+}))
+
+rownames(mat) = paste0("LN_", ln_names)
+colnames(mat) =  paste0("Tumor_", tumor_names)
+
+sector_order = c(rownames(mat), colnames(mat))
+
+circos.clear()
+circos.par()
+
+chordDiagram(mat, order = sector_order, annotationTrack = "grid", preAllocateTracks = list(track.height = 0.05), reduce = 0,
+             grid.col = col_T8_split)
+
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x,y) {
+  sector.name = get.cell.meta.data("sector.index")
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0.05,0))
+}, bg.border = NA)
+
+
+circos.clear()
+
+
+# Circos plot within tissues 
+ln_mat = outer(ln_names, ln_names, Vectorize(function(a,b){
+  length(intersect(ln_clones[[a]], ln_clones[[b]]))
+}))
+
+diag(ln_mat) = 0
+rownames(ln_mat) = colnames(ln_mat) = paste0("LN_", ln_names)
+
+tumor_mat = outer(tumor_names, tumor_names, Vectorize(function(a,b){
+  length(intersect(tumor_clones[[a]], tumor_clones[[b]]))
+}))
+
+diag(tumor_mat) = 0
+rownames(tumor_mat) = colnames(tumor_mat) = paste0("Tumor_", tumor_names)
+
+sector_order = c(rownames(ln_mat), rownames(tumor_mat))
+full_mat = Matrix::bdiag(ln_mat, tumor_mat) %>% as.matrix()
+rownames(full_mat) = colnames(full_mat) = sector_order
+
+
+nL = nrow(ln_mat)
+nT = nrow(tumor_mat)
+gap_vec = c(rep(1, nL - 1), 20, rep(1, nT - 1), 20)
+
+
+circos.clear()
+circos.par(gap.degree = gap_vec)
+
+chordDiagram(full_mat, order = sector_order, annotationTrack = "grid", preAllocateTracks = list(rack.height = 0.05), reduce = 0,
+             grid.col = col_T8_split)
+
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x,y) {
+  sector.name = get.cell.meta.data("sector.index")
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0.05,0))
+}, bg.border = NA)
+
+```
+
+
+
+## Figure 4I - route 1 vs route 2 vs mix vs other
+```{r} 
+# Figure 4I in graphad
+
+df <- clones ## all clones / clones_route1 / clones_route2 / clones_mix / clones_other
+# Extract row names
+rownames_df <- rownames(df)
+
+# Extract the patient number (before the underscore)
+patient_ids <- sub("_.*", "", rownames_df)
+
+# Count occurrences per patient
+patient_counts <- table(patient_ids)
+
+# Convert to a data frame
+patient_counts_df <- as.data.frame(patient_counts)
+colnames(patient_counts_df) <- c("PatientID", "RowCount")
+
+```
+
+
+### SUPPLEMENTARY FIGURE 4
+
+
+## Figure S4A - UMAPS shared and locexp per patient
+```{r UMAPs}
+T8shared <- subset(T8, subset = overlap_2 == "Y")
+T8locexp <- subset(T8, subset = overlap_2 == "N" & Frequency_2 >1)
+
+DimPlot(T8locexp, group.by = "cloneType_2",
+        pt.size=1) +
+  scale_color_manual(values = colorblind_vector_locexp (5), na.value="#e9e9e9") + 
+  ggtitle("locally expanded") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+
+
+DimPlot(T8shared, group.by = "cloneType_2",
+        pt.size=1) +
+  scale_color_manual(values = colorblind_vector_sh(5), na.value="#e9e9e9") + 
+  ggtitle("shared") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+```
+
+
+```{r dimplots shared}
+
+par(mfrow=c(4, 5))
+DimPlot(T8shared, group.by = "cloneSize", split.by = "patient_true", ncol = 4,
+        cols = colorblind_vector_sh(4)) 
+```
+
+
+
+### Figure S4B - Upset plot per patient and per tissue and patient distribution
+```{r} 
+
+# Assuming your dataframe is named T8@meta.data
+df <- T8@meta.data
+
+# Create a new column combining CD8.Cell.Types and tissue
+df <- df %>%
+  mutate(Cell_Tissue = paste0(CD8.Cell.Types, "_", tissue))
+
+# Filter out rows with NA in Clonotype_2
+df_filtered <- df %>%
+  filter(!is.na(Clonotype_2))
+
+# Create a list of unique Cell_Tissue combinations and order them
+unique_combinations <- c(
+  "Tcentral mem(1)_LN", "Tcentral mem(1)_tumor", "Tcentral mem(2)_LN", "Tcentral mem(2)_tumor",
+  "Tearly act(1)_LN", "Tearly act(1)_tumor", "Tearly act(2)_LN", "Tearly act(2)_tumor",
+  "Tlate act_LN", "Tlate act_tumor", "Teff(1)_LN", "Teff(1)_tumor", "Teff(2)_LN", "Teff(2)_tumor",
+  "Teff(3)_LN", "Teff(3)_tumor", "Tcytotoxic_LN", "Tcytotoxic_tumor", "Texh(1)_LN", "Texh(1)_tumor",
+  "Texh(2)_LN", "Texh(2)_tumor", "Texh(3)_LN", "Texh(3)_tumor", "Texh(4)_LN", "Texh(4)_tumor",
+  "Tprolif_LN", "Tprolif_tumor", "Tmisc_LN", "Tmisc_tumor", "Tc17/MAIT_LN", "Tc17/MAIT_tumor"
+)
+
+# Initialize a new dataframe with unique Clonotype_1 values as rownames and unique combinations as columns
+result_df <- data.frame(matrix(0, nrow = length(unique(df_filtered$Clonotype_2)), 
+                               ncol = length(unique_combinations) + 3)) # check if you add more columns
+rownames(result_df) <- unique(df_filtered$Clonotype_2)
+colnames(result_df) <- c(unique_combinations, "Frequency", "Patient", "overlap") # bepaal welke columns je erbij wil
+
+# Fill the dataframe with summed values and add Frequency column
+for (i in 1:nrow(df_filtered)) {
+  if (!is.na(df_filtered$Cell_Tissue[i])) {
+    result_df[df_filtered$Clonotype_2[i], df_filtered$Cell_Tissue[i]] <- result_df[df_filtered$Clonotype_2[i], df_filtered$Cell_Tissue[i]] + 1
+  }
+  result_df[df_filtered$Clonotype_2[i], "Frequency"] <- df_filtered$Frequency_2[i]
+  result_df[df_filtered$Clonotype_2[i], "Patient"] <- df_filtered$patient_true[i]
+  result_df[df_filtered$Clonotype_2[i], "overlap"] <- df_filtered$overlap_2[i]
+}
+
+### SHARED CLONES
+dfshared <- result_df %>%
+  filter(overlap == "Y") %>%
+  filter(Frequency>2)
+
+upset(dfshared, unique_combinations,
+      n_intersections = 20,
+      base_annotations=list(
+        'Intersection size'=intersection_size(
+          counts=T,
+          mapping=aes(fill=Patient)
+        ))) + 
+  ggtitle("All shared clones top20")
+
+
+
+## LOCALLY EXPANDED CLONES
+dfnon <- result_df %>%
+  filter(overlap == "N") %>%
+  filter(Frequency >1)
+
+upset(dfnon, unique_combinations,
+      n_intersections = 20,
+      base_annotations=list(
+        'Intersection size'=intersection_size(
+          counts=T,
+          mapping=aes(fill=Patient))
+      )) + 
+  ggtitle("All non-shared clones top20")
+
+
+```
+
+
+## Fig S4C - route 1/2/crossover/other
+```{r} 
+# Figure S4C in graphad
+
+df <- clones ## all clones / clones_route1 / clones_route2 / clones_mix / clones_other
+# Extract row names
+rownames_df <- rownames(df)
+
+# Extract the patient number (before the underscore)
+patient_ids <- sub("_.*", "", rownames_df)
+
+# Count occurrences per patient
+patient_counts <- table(patient_ids)
+
+# Convert to a data frame
+patient_counts_df <- as.data.frame(patient_counts)
+colnames(patient_counts_df) <- c("PatientID", "RowCount")
+```

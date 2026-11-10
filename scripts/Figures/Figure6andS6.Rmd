@@ -1,0 +1,343 @@
+---
+title: "Figure6"
+author: "V. Gerretsen"
+date: "2025-12-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+nsclc <- readRDS("~/R/nsclc.rds")
+
+### nsclc$All.Subsets
+All.Subsets.Col = c(
+  
+  #Blue
+  "CD8 T"="#12448F",
+  #"CD8 Texh"=="#00B4D8",
+ "CD8 T IFN"="#0078B7",
+  #green
+  "CD4 Th"="#307153",
+  "CD4 Treg"="#B9DCC4",
+  "CD4 Tfh"="#52B689",
+  "T undefined"="#98CEB0",
+  #Red/orange
+  "Plasma B cell" ="#D80F16",
+  "B cell"="#db4f37",
+  "CD16+ NK" ="#F28B0D",
+  "NK"="#E75E0D",
+  "ILC"="#FBB914",
+  "Mast cell"="#E6CBB1",
+  #Green/light
+  "cDC2" = "#D7E293",
+  "cDC1"= "#E8E230",
+  "migDC" ="#7EB928",
+  #"#B0CB21"
+  #Dark purple
+  #"#241A43"
+  #Pink 
+  "Macrophage APOE" = "#644193",
+  #"#F5B1C0"
+  #"#F9CBD5"
+  "pDC" = "#A4173D",
+  "CD14+ Monocyte"= "#EA4E6E",
+  "CD16+ Monocyte"= "#EE738F",
+  "MoDC"  = "#E72270",
+  #Blue
+  #"#19527D"
+  #Purple pastel
+  "Macrophage LYZ" = "#C1B3D8",
+  #"#DAC4E0"
+  #Brown
+  "Stromal cell" = "#472C20",
+  "Proliferating"= "#AF8968",
+  #grey
+  "Cycling" = "#BDBDBD"
+)
+
+
+```
+
+
+```{r}
+library(tidyverse)
+library(nichenetr)
+library(multinichenetr)
+```
+
+
+## Fig 6A - multinichenet circoplot
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r MNN for CD8}
+multinichenet_output = readRDS("~/R/MNN_BCA_tumorvsLN_final_output.rds")
+
+sample_id = "sample_id"
+group_id = "tissue"
+celltype_id = "All.Cell.Types"
+
+covariates = NA 
+batches = NA 
+
+contrasts_oi = c("'tumor-LN','LN-tumor'")
+contrast_tbl = tibble(contrast =
+                        c("tumor-LN", "LN-tumor"),
+                      group = c("tumor", "LN"))
+logFC_threshold = 0.50
+p_val_adj = TRUE
+p_val_threshold = 0.05
+fraction_cutoff = 0.05
+top_n_target = 250
+
+
+
+
+### load nichenet models ligand-receptor rds
+lr_network_all = readRDS("~/R/lr_network_human_allInfo_30112033.rds") %>% mutate(ligand = convert_alias_to_symbols(ligand, organism = "human"), receptor = convert_alias_to_symbols(receptor, organism = "human"))
+lr_network_all = lr_network_all  %>% mutate(ligand = make.names(ligand), receptor = make.names(receptor)) 
+lr_network = lr_network_all %>% distinct(ligand, receptor)
+
+ligand_target_matrix = readRDS("~/R/ligand_target_matrix_nsga2r_final.rds")
+colnames(ligand_target_matrix) = colnames(ligand_target_matrix) %>% convert_alias_to_symbols(organism = "human") %>% make.names()
+rownames(ligand_target_matrix) = rownames(ligand_target_matrix) %>% convert_alias_to_symbols(organism = "human") %>% make.names()
+lr_network = lr_network %>% filter(ligand %in% colnames(ligand_target_matrix))
+ligand_target_matrix = ligand_target_matrix[, lr_network$ligand %>% unique()]
+
+
+## set celltypes
+
+celltypes_oi = multinichenet_output$celltype_de$cluster_id %>% unique() %>% sort()
+
+
+## set colors
+colors_sender = c(
+  "CD8.T"="#12448F",
+  "CD4.CD8.T"="#0078B7",
+  "CD4.T"="#307153",
+  "CD4.Treg"="#B9DCC4",
+  "CD4.Tfh.like"="#52B689",
+  "T.misc"="#98CEB0",
+  "Plasma.B.cell" ="#D80F16",
+  "B.cell"="#db4f37",
+  "CD16..NK" ="#F28B0D",
+  "NK"="#E75E0D",
+  "ILC"="#FBB914",
+  "Mast.cell"="#E6CBB1",
+  "cDC2" = "#D7E293",
+  "cDC1"= "#E8E230",
+  "migDC" ="#7EB928",
+  "Macrophage" = "#644193",
+  "pDC" = "#A4173D",
+  "CD14..Monocyte"= "#EA4E6E",
+  "CD16..Monocyte"= "#EE738F",
+  "MoDC"  = "#E72270",
+  "Myeloid.misc" = "#C1B3D8",
+  "Stromal.cell" = "#472C20",
+  "Proliferating"= "#AF8968",
+  "Cycling" = "#BDBDBD"
+)
+
+colors_receiver = colors_sender
+
+
+## Myeloid cells vs CD8
+myeloid_cells = c("migDC", "cDC2", "CD14..Monocyte", "pDC", "MoDC", "CD16..Monocyte", "Macrophage", "cDC1")
+lymphoid_cells = c("CD8.T")
+
+###### circolpot top 200 --> CD69 interacting with LGALS1 macrophage cDC2 and MoDC
+prioritized_tbl_oi_all_combined = get_top_n_lr_pairs(
+  multinichenet_output$prioritization_tables, 
+  top_n = 200,  # default 2000
+  rank_per_group = FALSE, 
+  senders_oi = union(myeloid_cells, lymphoid_cells), 
+  receivers_oi = union(myeloid_cells, lymphoid_cells)
+)
+
+##
+# CD8 als reciever cell
+prioritized_tbl_oi_all = prioritized_tbl_oi_all_combined %>% filter(sender %in% myeloid_cells & receiver %in% lymphoid_cells )
+prioritized_tbl_oi = 
+  multinichenet_output$prioritization_tables$group_prioritization_tbl %>%
+  filter(id %in% prioritized_tbl_oi_all$id) %>%
+  distinct(id, sender, receiver, ligand, receptor, group) %>% 
+  left_join(prioritized_tbl_oi_all)
+prioritized_tbl_oi$prioritization_score[is.na(prioritized_tbl_oi$prioritization_score)] = 0
+
+circos_list = make_circos_group_comparison(prioritized_tbl_oi, colors_sender, colors_receiver)
+
+```
+
+## Fig 6B - pseudobulk L-R expression per patient per tissue for CD69 - LGALS1
+```{r multinichenet}
+myeloid_cells = c("cDC1", "cDC2", "MoDC", "Macrophage")
+lymphoid_cells = c( "CD8.T")
+group_oi = "tumor"
+prioritized_tbl_oi_tumor_all = get_top_n_lr_pairs(
+  multinichenet_output$prioritization_tables, 
+  100, 
+  groups_oi = group_oi, 
+  receivers_oi = union(myeloid_cells, lymphoid_cells),
+  senders_oi = union(myeloid_cells, lymphoid_cells)
+) 
+
+prioritized_tbl_oi_tumor = prioritized_tbl_oi_tumor_all %>% filter(sender %in% myeloid_cells & receiver %in% lymphoid_cells )
+
+plot_oi = make_sample_lr_prod_activity_plots_Omnipath(
+  multinichenet_output$prioritization_tables, 
+  prioritized_tbl_oi_tumor %>% inner_join(lr_network_all)
+)
+
+plot_oi + ggtitle("Myeloid to Lymphoid - Tumor")
+## minimalized in Illustrator
+
+```
+
+
+
+## Figure 6C - Violinplots CD69, adt_cd69 and LGALS1
+```{r}
+VlnPlot(nsclc, 
+        'CD69', 
+        idents = c("CD8 T", "Macrophage APOE", "MoDC", "cDC2", "cDC1", "migDC"),
+        cols = All.Subsets.Col, pt.size = 0)
+VlnPlot(nsclc, 
+        'adt_CD69.1', 
+        idents = c("CD8 T", "Macrophage APOE", "MoDC", "cDC2", "cDC1", "migDC"),
+        cols = All.Subsets.Col, pt.size = 0)
+
+VlnPlot(nsclc, 
+        'LGALS1', 
+        idents = c("CD8 T", "Macrophage APOE", "MoDC", "cDC2", "cDC1", "migDC"),
+        cols = All.Subsets.Col, pt.size = 0)
+
+```
+
+## Figure 6D - CD69 - galectin1 interaction in lung tumor and TDLN
+### HAWK results (Graphpad)
+
+
+## Fig 6E - experimental set-up KP (BioRender)
+
+## Fig 6F - tumor nodules (Graphpad) and H&E (QuPath)
+
+## Fig 6G - Ki67 on tumor, TDLN and circulating (flowjo, Graphpad)
+
+## Fig 6H - CD103 expression (flowjo, Graphpad)
+
+
+
+
+## Fig 6J - CD103 vs CD69 (show blockade) example flow plot
+
+## Fig 6K - route 1 and route 2 resembles human T cell subsets
+
+
+
+
+
+# SUPPLEMENTARY FIGURE 6
+
+## Fig S6A - CD69 and LGALS1 expression on RNA and CITE level in NSCLC dataset (tumor + TDLN)
+
+You can also embed plots, for example:
+
+```{r UMAP with CD69 and LGALS1, echo=FALSE}
+
+FeaturePlot(nsclc, "CD69", cols = c("lightgrey", "#0078B7"), 
+            pt.size = 2,
+            order = T) + NoAxes()
+FeaturePlot(nsclc, "adt_CD69.1", cols = c("lightgrey", "#12448F"), 
+            pt.size = 2,
+            order = T) + NoAxes()
+FeaturePlot(nsclc, "LGALS1", cols = c("lightgrey", "#644193"), 
+            pt.size = 2,
+            order = T) + NoAxes()
+
+```
+
+
+# load data for Fig S6B
+```{r}
+col_T8_split = c(
+  "LN_Tcentral mem(1)" =  "#edba40",
+  "LN_Tearly act(1)" = "#e28c33",
+  "LN_Teff(1)"  = "#e0652b",
+  "LN_Tcentral mem(2)" = "#AED140",
+  "LN_Tearly act(2)" =  "#2DA049",
+  "LN_Teff(2)" = "#1D6517",
+  "LN_Tlate act" = "#a9725A",
+  "LN_Teff(3)" = "#009688",
+  "LN_Tcytotoxic" =  "#00bcd4", 
+  "LN_Texh(1)"= "#03a9f4" ,
+  "LN_Texh(2)" = "#2196f3",
+  "LN_Texh(3)" = "#3f51b5",
+  "LN_Texh(4)" = "#673ab7" ,
+  "LN_Tprolif" = "#9c27b0",
+  "LN_Tmisc"= "#788176", 
+  "LN_Tc17/MAIT" = "#f44336",
+  
+  "Tumor_Tcentral mem(1)" =  "#edba40",
+  "Tumor_Tearly act(1)" = "#e28c33",
+  "Tumor_Teff(1)"  = "#e0652b",
+  "Tumor_Tcentral mem(2)" = "#AED140",
+  "Tumor_Tearly act(2)" =  "#2DA049",
+  "Tumor_Teff(2)" = "#1D6517",
+  "Tumor_Tlate act" = "#a9725A",
+  "Tumor_Teff(3)" = "#009688",
+  "Tumor_Tcytotoxic" =  "#00bcd4", 
+  "Tumor_Texh(1)"= "#03a9f4" ,
+  "Tumor_Texh(2)" = "#2196f3",
+  "Tumor_Texh(3)" = "#3f51b5",
+  "Tumor_Texh(4)" = "#673ab7" ,
+  "Tumor_Tprolif" = "#9c27b0",
+  "Tumor_Tmisc"= "#788176", 
+  "Tumor_Tc17/MAIT" = "#f44336"
+) 
+```
+
+
+## Figure S6B - Violinplots and bar graphs of cells expressing >0.01 CD69, PD-1, CTLA4 and TIGIT in CD8 subsets
+```{r}
+## subset on expression levels >0.01 (= exclude 0)
+T8.CD69 <- subset(T8, subset = CD69 > 0.01)
+
+T8.PD1 <-subset(T8, subset = PDCD1 > 0.01)
+
+T8.CTLA4 <-subset(T8, subset = CTLA4 > 0.01)
+
+T8.TIGIT <-subset(T8, subset = TIGIT > 0.01)
+
+VlnPlot(T8.CD69, "CD69", pt.size=0, col = col_T8)
+
+VlnPlot(T8.PD1, "PDCD1", pt.size=0, col = col_T8)
+
+VlnPlot(T8.CTLA4, "CTLA4", pt.size=0, col = col_T8)
+
+VlnPlot(T8.TIGIT, "TIGIT", pt.size=0, col = col_T8)
+
+
+a<-table(T8.CD69@meta.data$CD8.Cell.Types)
+b<-table(T8.PD1@meta.data$CD8.Cell.Types)
+c<-table(T8.CTLA4@meta.data$CD8.Cell.Types)
+d<-table(T8.TIGIT@meta.data$CD8.Cell.Types)
+e<-table(T8@meta.data$CD8.Cell.Types)
+ff<-cbind(a,b,c,d,e)
+View(ff)
+write.csv(ff, 'FigS6.expr_above_0.csv')
+
+# see graphpad FigS6
+```
+
+
+
+## Fig S6C - HAWK QF Pro score per patient per tissue (Graphpad)
+
+## Fig S6D - gating CD103pos vs CD103neg and expression (flowjo, Graphpad)
+
+## Fig S6E - Expression of (pre)exhaustion markers in CD8 T cells per group (flowjo, Graphpad)
+
+
+

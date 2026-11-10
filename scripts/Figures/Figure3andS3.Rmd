@@ -1,0 +1,828 @@
+---
+title: "Figure3"
+author: "V. Gerretsen"
+date: "2025-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+## start up
+```{r load data and color code, echo=FALSE}
+set.seed(42)
+library(Seurat)
+library(ggpubr)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(patchwork)
+library(scCustomize)
+library(scRepertoire)
+library(scCustomize)
+library(purrr)
+library(tidyr)
+
+T8 <- readRDS("~/R/T8.rds")
+T8@meta.data$cloneType_2 -> T8@meta.data$cloneSize
+
+T8tum <- subset(T8, subset = tissue == "tumor")
+T8LN <- subset(T8, subset = tissue == "LN")
+
+
+
+col_T8 = c(
+  "Tcentral mem(1)" =  "#edba40",
+  "Tearly act(1)" = "#e28c33",
+  "Teff(1)"  = "#e0652b",
+  "Tcentral mem(2)" = "#AED140",
+  "Tearly act(2)" =  "#2DA049",
+  "Teff(2)" = "#1D6517",
+  "Tlate act" = "#a9725A",
+  "Teff(3)" = "#009688",
+  "Tcytotoxic" =  "#00bcd4", 
+  "Texh(1)"= "#03a9f4" ,
+  "Texh(2)" = "#2196f3",
+  "Texh(3)" = "#3f51b5",
+  "Texh(4)" = "#673ab7" ,
+  "Tprolif" = "#9c27b0",
+  "Tmisc"= "#788176", 
+  "Tc17/MAIT" = "#f44336"
+) 
+
+
+Tissue.Col = c(
+  "LN" = '#00897b',
+  "tumor" = "#B80219"
+)
+
+
+colorblind_vector <- colorRampPalette(rev(c("#0D0887FF", # single
+                                            "#7301A8FF", # small
+                                            "#BD3786FF", # medium
+                                            "#ED7953FF", # large
+                                            "#FDC926FF", # hyperexp
+                                            "#F0F921FF")))# ultraexp
+
+colorblind_vector_tum <- colorRampPalette(rev(c("#7301A8FF", # small
+                                                "#BD3786FF", # medium
+                                                "#ED7953FF", # large
+                                                "#FDC926FF", # hyperexp
+                                                "#F0F921FF")))# ultraexp
+
+
+colorblind_vector_sh <- colorRampPalette(rev(c("#7301A8FF", # small
+                                               "#BD3786FF", # medium
+                                               "#ED7953FF", # large
+                                               "#FDC926FF"))) # hyperexp
+
+
+```
+
+
+```{r reorder CD8.Cell.Types}
+my_seurat_object <- T8
+#my_seurat_object@active.ident <- factor(my_seurat_object@active.ident, levels = c("Cluster1", "Cluster2", "Cluster3"))
+
+# Get existing cluster identities
+current_clusters <- my_seurat_object$CD8.Cell.Types
+levels(current_clusters)
+# Define the new order (e.g., from a specific plot or cell type identification)
+desired_order <- c("Tcentral mem(1)","Tearly act(1)","Teff(1)",
+                   "Tcentral mem(2)","Tearly act(2)","Teff(2)",
+                   "Tlate act","Teff(3)",
+                   "Tcytotoxic",
+                   "Texh(1)", "Texh(2)", "Texh(3)", "Texh(4)", "Tprolif", "Tmisc", "Tc17/MAIT")
+
+# Re-level the factor
+my_seurat_object$CD8.Cell.Types <- factor(current_clusters, levels = desired_order)
+
+T8 <- my_seurat_object
+rm(my_seurat_object)
+
+```
+
+## Fig 3A - CD8 UMAP
+```{r} 
+DimPlot(T8, 
+        group.by = "CD8.Cell.Types", label = F,
+        cols = col_T8, 
+        raster = F) + 
+  NoAxes() + NoLegend()
+
+```
+
+## Figure 3B - heatmap selected genes
+```{r heatmap}
+allgenes <- c( # naive like markers
+                "CCR7","NOSIP","LEF1","SELL","TCF7","IL7R",
+              
+              # cytokines and effector molecules
+              "GZMB", "FASL", 
+                "IL2","CXCR3","GZMK","TNFAIP3","TNF", "IFNG",
+               "KLRC1","KLRC2","KLRD1", "KLRK1",
+                "XCL1", "XCL2",  "CCL5",
+              "GZMH", "GNLY", "PRF1", "NKG7",
+               "CX3CR1", 
+             
+               
+               # costim
+              "CD226","ICOS", "CD40LG", "TNFRSF4","TNFRSF18","TNFRSF9","TNFSF9",
+           "LAYN","CD27", "CD28",
+
+
+              ## inhib checkponts
+              "BTLA","CD274","PDCD1LG2", "CTLA4",
+               "TIGIT", "PDCD1", "HAVCR2","LAG3",
+              # Trm markers
+              "ZNF683", "ITGAE", "ENTPD1",
+              # transcription factors
+              "EOMES","ZEB2","TBX21","ID2", "HOPX", "TOX2", "TOX",
+              # cycling / proliferating
+              "MKI67", "STMN1",
+              "KLRB1",  "IL23R", "RORC")
+
+
+# Calculate average expression per cluster
+avg_expr <- AverageExpression(object = T8, group.by = "CD8.Cell.Types") # should I use AggregateExpression ?
+avg_expr <- AggregateExpression(object = T8, group.by = "CD8.Cell.Types") # should I use AverageExpression?
+
+
+# Extract the expression matrix
+avg_expr_matrix <- avg_expr$RNA
+
+# subset_matrix contains the expression values for allgenes per cluster
+subset_matrix <- avg_expr_matrix[rownames(avg_expr_matrix) %in% allgenes, ]
+
+# order rows
+row_names <- rownames(avg_expr_matrix)
+
+# Determine order based on 'allgenes'
+ordered_indices <- order(match(row_names, allgenes))
+
+# Reassign ordered row names
+subset_matrix <- avg_expr_matrix[ordered_indices, ]
+subset_matrix <- subset_matrix[rownames(subset_matrix) %in% allgenes, ]
+
+
+### scale with z-score
+cal_z_score <- function(x){
+  (x - mean(x)) / sd(x)
+}
+
+# heatmap
+data_subset_norm <- t(apply(subset_matrix, 1, cal_z_score))
+
+pheatmap(data_subset_norm,
+              #color = hcl.colors(50, "RdGy", rev = T),
+              #order_color = NA,
+              #scale = "row",
+              cutree_rows = F,
+              cellwidth = 12,
+              #cellheight = 15,
+              cluster_rows = F,
+              cluster_cols = F)
+```
+
+
+## Figure 3C - CD8 featureplots
+```{r early Tcm}
+library(scCustomize)
+# split into tumor and LN subset
+Idents(T8) <- "tissue"
+T8_LN <- subset(T8, idents = "LN")
+dim(T8_LN)
+T8_tumor <- subset(T8, idents = "tumor")
+dim(T8_tumor)
+
+# Select naive genes
+gene.early <- list(c('SELL', 'LEF1', 'CCR7', 'TCF7', 'IL7R', 'LTB'))
+# AddModuleScore
+T8 <- AddModuleScore(object = T8, features = gene.early, name = "gene.early")
+T8_LN <- AddModuleScore(object = T8_LN, features = gene.early, name = "gene.early")
+T8_tumor <- AddModuleScore(object = T8_tumor, features = gene.early, name = "gene.early")
+
+a<- FeaturePlot_scCustom(T8, features = "gene.early1", 
+                     colors_use = viridis_light_high, na_color = "lightgray") + #, na_cutoff = NULL)
+  ggtitle("Early/Tcm", subtitle = "(SELL, LEF1, CCR7, TCF7, IL7R, LTB)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+#plot(a)
+
+```
+
+
+```{r cytotoxicity} 
+# Select cytotox genes
+gene.cyt <- list(c('GZMA', 'GZMB','GZMK', 'CX3CR1', 'FCGR3A', 'KLRG1'))
+# AddModuleScore
+T8 <- AddModuleScore(object = T8, features = gene.cyt, name = "gene.cyt")
+T8_LN <- AddModuleScore(object = T8_LN, features = gene.cyt, name = "gene.cyt")
+T8_tumor <- AddModuleScore(object = T8_tumor, features = gene.cyt, name = "gene.cyt")
+
+c<- FeaturePlot_scCustom(T8, features = "gene.cyt1", 
+                     colors_use = viridis_light_high, na_color = "lightgray") + #, na_cutoff = NULL)
+  ggtitle("Cytotoxic", subtitle = "GZMA, GZMB, GZMK, CX3CR1, FCGR3A, KLRG1") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+#plot(c)
+```
+
+
+```{r exhaustion}
+
+# Select exhaustion genes
+gene.exh <- list(c('PDCD1', 'HAVCR2', 'CTLA4', 'TIGIT', 'ENTPD1', 'LAG3'))
+# AddModuleScore
+T8 <- AddModuleScore(object = T8, features = gene.exh, name = "gene.exh")
+T8_LN <- AddModuleScore(object = T8_LN, features = gene.exh, name = "gene.exh")
+T8_tumor <- AddModuleScore(object = T8_tumor, features = gene.exh, name = "gene.exh")
+
+d<- FeaturePlot_scCustom(T8, features = "gene.exh1", 
+                     colors_use = viridis_light_high, na_color = "lightgray") + #, na_cutoff = NULL)
+  ggtitle("Exhaustion", subtitle = "PDCD1, HAVCR2, CTLA4, TIGIT, ENTPD1, LAG3") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+
+#plot(d)
+```
+
+```{r featureplots 3-way}
+plot(a|c|d)
+```
+
+
+## Fig 3D1 - Distribution of cluster frequency per patient and tissue type
+```{r cell counts per patient and tissue}
+
+md <- T8@meta.data
+
+# create a table with cell counts per cluster per patient and tissue
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, tissue, CD8.Cell.Types) %>%
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true, tissue) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+
+# make a stacked bar chart of the frequency per patient tissue
+ggplot(cell_count, aes(x = patient_true, y = percentage, fill = CD8.Cell.Types)) +
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_T8) +
+  facet_wrap(~ tissue) +
+  labs(
+   # title = "Distribution of cluster frequency per patient and tissue type",
+    x = "Patient",
+    y = "Percentage",
+    fill = "CD8 cluster"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+## Figure 3D2 - Distribution of clusters per tissue (all patients together) - AVERAGE
+```{r, echo=FALSE}
+
+## remove NAs (if patient_true = NA)
+cell_count <- T8@meta.data %>%
+  filter(!is.na(patient_true))
+
+cell_count <- cell_count %>% 
+  group_by(tissue, CD8.Cell.Types) %>% 
+  summarise(n = n())
+
+cell_count <- cell_count %>% mutate(percentage = n / sum(n) * 100)
+
+
+#rename LN to TDLN
+cell_count$tissue[cell_count$tissue == "LN"] <- "TDLN"
+
+# barplot distribution per tissue
+ggplot(cell_count, aes(x = tissue, y = percentage, fill = CD8.Cell.Types)) +
+  geom_bar(stat = "identity", width = 0.5)+ 
+  scale_fill_manual(values = col_T8) +
+  theme_classic()+
+  guides(fill=guide_legend(title="Cell Types")) + 
+  ylab("percentage") +
+  xlab("")+ 
+  guides(fill=guide_legend(ncol=1))
+
+
+## * significant difference: Tcentral mem(1), Texh(1) and
+
+```
+
+
+
+## Figure 3E - Tpex signature
+```{r Tpex featureplot}
+seurat_genes <- rownames(T8)
+## Pai et al. Fig 2C
+Tpex <- c("GZMA", "INPP4B",
+          "IL32", "PLEKHF1","SIT1", "MYL12A", "ITM2B", "IL16",
+          "TRAF3IP3", "MTRNR2L12", "PTGDR",
+          "FCRL3","RNPC3", "ITGB2", "LAMP1", "KLF12",
+          "ZNF302", "PLEK", "FCMR", "KLRG1",
+          "NKG7", "GZMK", "CD27", "GIMAP7", "CMC1", "LIMD2", "IFITM2",
+          "CHI3L2", "RARRES3", "DENND2D")
+Tpex <- intersect(Tpex, seurat_genes)
+T8 <- AddModuleScore(object = T8, features = Tpex, name = "Tpex")
+FeaturePlot_scCustom(T8, features = "Tpex1", split.by = "tissue",
+                     colors_use = viridis_light_high, na_color = "lightgray") + #, na_cutoff = NULL)
+  ggtitle("Tpex", 
+          subtitle = "Pai et al.") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+```
+
+
+
+## Figure 3F1 - clonal distibution in stacked bars
+```{r screpertoire v2}
+#T8@meta.data$cloneType_2 -> T8@meta.data$cloneSize
+# absolute numbers
+clonalOccupy(T8, 
+             x.axis = "tissue")
+# proportion
+clonalOccupy(T8, 
+             x.axis = "tissue", 
+             proportion = TRUE, 
+             label = FALSE)
+
+## NB changed the colors in illustrator to previous color palette
+
+## graphpad for paired statistics
+## UNIQUE CLONES PER CLONETYPE_2 PER PATIENT
+df <- T8@meta.data %>%
+  select(patient_true, tissue, Clonotype_2, cloneType_2)
+
+result <- df %>%
+  filter(!is.na(patient_true)) %>%  # Remove rows with NA in patient_true
+  group_by(patient_true, tissue, cloneType_2) %>%  # Group by patient, tissue, and clone type
+  summarise(unique_clones = n_distinct(Clonotype_2), .groups = "drop") %>%  # Count unique clonotypes
+  arrange(patient_true, tissue, cloneType_2)  # Optional: sort for readability
+
+# View result
+View(result)
+# write.csv(result, 'clonetype.per.patient.tissue.csv')
+
+## CELLS PER CLONETYPE_2 PER PATIENT
+row_counts <- df %>%
+  filter(!is.na(patient_true)) %>%  # Remove rows with NA in patient_true
+  group_by(patient_true, tissue, cloneType_2) %>%
+  summarise(row_count = n(), .groups = "drop") %>%  # Count rows in each group
+  arrange(patient_true, tissue, cloneType_2)
+
+# View result
+View(row_counts)
+# write.csv(row_counts, 'cells.clonetypes.per.patient.tissue.csv')
+
+## UNIQUE CLONES PER CLONETYPE_2 PER PATIENT
+df_summary <- T8@meta.data %>%
+  group_by(cloneType_2, tissue) %>%
+  summarise(unique_clones = n_distinct(Clonotype_2), .groups = "drop")
+```
+
+## Figure 3F2 - clonal distribution on UMAP
+```{r}
+## remove all NAs
+T8dim <- subset(T8, subset = cloneType_2 !=is.na(cloneType_2))
+
+DimPlot(T8dim, group.by = "cloneType_2",
+        pt.size=0.5)
+  scale_color_manual(values = colorblind_vector(6), na.value="#e9e9e9") + 
+  ggtitle("distribution of clonotypes, shared & non-shared") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+
+```
+
+
+## Fig 3E3 - number of clones for stacked barplot
+```{r}
+df <- T8@meta.data %>%
+  select(patient_true, tissue, Clonotype_2, cloneType_2)
+
+result <- df %>%
+  filter(!is.na(patient_true)) %>%  # Remove rows with NA in patient_true
+  group_by(tissue, cloneType_2) %>%
+  summarise(unique_clones = n_distinct(Clonotype_2), .groups = "drop") %>%  # Count unique clonotypes per tissue
+  arrange( tissue, cloneType_2)  # Optional: sort for readability
+
+# View result
+View(result)
+# write.csv(result, 'CD8.clonetype.per.tissue.csv')
+
+```
+
+## FIG 3F1 - shannon diversity index t.test
+```{r shannon diversity}
+## shannon diversity per tissue per patient
+
+T8LN_dim <- subset(T8LN, subset =! is.na(T8LN@meta.data$overlap_2))
+T8tum_dim <- subset(T8tum, subset =! is.na(T8tum@meta.data$overlap_2))
+
+t1 <- clonalDiversity(T8LN_dim, 
+                      cloneCall = "CTgene", 
+                      group.by = "patient_true",
+                      metric = "shannon",
+                      palette = "viridis",
+                      exportTable = T)
+
+t2 <- clonalDiversity(T8tum_dim, 
+                      cloneCall = "CTgene", 
+                      group.by = "patient_true",
+                      metric = "shannon",
+                      exportTable = T)
+
+shannon <- as.data.frame(cbind(c(t1$patient_true), c(t1$shannon), c(t2$shannon)))
+colnames(shannon) <- c("patient", "LN", "tumor")
+shannon$LN <- as.numeric(shannon$LN)
+shannon$tumor <- as.numeric(shannon$tumor)
+res <- t.test(c(shannon$LN), c(shannon$tumor), paired = T)
+res
+
+write.csv(shannon, 'CD8.Fig3.shannon.tissue.csv')
+
+
+```
+
+## FIG 3F2 - shannon diversity index
+```{r shannon diversity}
+## zie graphpad
+df_long <- pivot_longer(shannon, cols = c(LN, tumor), names_to = "type", values_to = "value")
+ggplot(df_long, aes(x = type, y = value, fill = type)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.15, size = 2, alpha = 0.8) +
+  theme_classic(base_size = 10) +
+  stat_compare_means(comparisons = list(c("LN", "tumor")), method = "t.test", label = "p.signif") + 
+  labs(
+    title = "shannon diversity index",
+    y = "index",
+    x = "") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    legend.position = "none"                             # Remove legend
+  ) +   scale_fill_manual(values = c(Tissue.Col)) +
+  scale_y_continuous(limits=c(0, 6))
+```
+
+
+## Fig 3G - clonotype tissue sharing per patient
+```{r}
+col_overlap <- c("Y" = "#EC5E27", "N" = "#403D39", "NA" = "grey")
+
+order <- c("Y", "N", "NA")
+
+md <- T8@meta.data
+# create a table with OVERLAP per cluster per patient and tissue
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, overlap_2) %>% ## add tissue if split by tissue
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+# make a stacked bar chart of the proportion per patient tissue
+ggplot(cell_count, aes(x = patient_true, y = percentage, fill = factor(overlap_2, order))) + ## factor + order to adjust order
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_overlap) +
+ # facet_wrap(~ tissue) +
+  labs(
+    # title = "Distribution of cluster frequency per patient and tissue type",
+    x = "Patient",
+    y = "Percentage",
+    fill = "clonotype sharing"
+  ) +
+  theme_minimal()
+```
+
+### SUPPLEMENTARY FIGURE 3
+
+## Fig S3A - Distribution of cluster cell count per patient and tissue type
+```{r cell counts per patient and tissue}
+
+md <- T8@meta.data
+
+# create a table with cell counts per cluster per patient and tissue
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, tissue, CD8.Cell.Types) %>%
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true, tissue) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+
+
+# make a stacked bar chart of the cell count per patient tissue 
+ggplot(cell_count, aes(x = patient_true, y = n, fill = CD8.Cell.Types)) +
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_T8) +
+  facet_wrap(~ tissue) +
+  labs(
+    title = "Distribution of cells per cluster per patient and tissue type",
+    x = "Patient",
+    y = "Cells",
+    fill = "CD8 cluster"
+  ) +
+  theme_minimal()
+
+```
+
+
+## Figure S3B - CD8 gene signatures split by tissue
+```{r featureplots}
+library(scCustomize)
+# Select naive genes
+gene.early <- list(c('SELL', 'LEF1', 'CCR7', 'TCF7', 'IL7R', 'LTB'))
+# AddModuleScore
+T8 <- AddModuleScore(object = T8, features = gene.early, name = "gene.early")
+T8LN <- AddModuleScore(object = T8LN, features = gene.early, name = "gene.early")
+T8tum <- AddModuleScore(object = T8tum, features = gene.early, name = "gene.early")
+
+
+a<- FeaturePlot_scCustom(T8, features = "gene.early1", 
+                         colors_use = viridis_light_high, na_color = "lightgray") + #, na_cutoff = NULL)
+  ggtitle("Early/Tcm", subtitle = "(SELL, LEF1, CCR7, TCF7, IL7R, LTB)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+aa<- FeaturePlot_scCustom(T8LN, features = "gene.early1", 
+                          colors_use = viridis_light_high, na_color = "lightgray",
+                          min.cutoff = NA, max.cutoff = 2.2)+ #, na_cutoff = NULL)
+  ggtitle("Early/Tcm | TDLN", subtitle = "(SELL, LEF1, CCR7, TCF7, IL7R, LTB)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+aaa<- FeaturePlot_scCustom(T8tum, features = "gene.early1", 
+                           colors_use = viridis_light_high, na_color = "lightgray",
+                           min.cutoff = NA, max.cutoff = 2.2)+ #, na_cutoff = NULL)
+  ggtitle("Early/Tcm | Tumor", subtitle = "(SELL, LEF1, CCR7, TCF7, IL7R, LTB)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+
+plot(aa|aaa)
+
+```
+
+
+
+```{r cytotox genes} 
+# Select cytotox genes
+gene.cyt <- list(c('GZMA', 'GZMB','GZMK', 'CX3CR1', 'FCGR3A', 'KLRG1'))
+# AddModuleScore
+T8 <- AddModuleScore(object = T8, features = gene.cyt, name = "gene.cyt")
+T8LN <- AddModuleScore(object = T8LN, features = gene.cyt, name = "gene.cyt")
+T8tum <- AddModuleScore(object = T8tum, features = gene.cyt, name = "gene.cyt")
+
+c<- FeaturePlot_scCustom(T8, features = "gene.cyt1", 
+                     colors_use = viridis_light_high, na_color = "lightgray",
+                     min.cutoff = NA, max.cutoff = 2.0) + #, na_cutoff = NULL)
+  ggtitle("Cytotoxic", subtitle = "GZMA, GZMB, GZMK, CX3CR1, FCGR3A, KLRG1") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+cc<- FeaturePlot_scCustom(T8LN, features = "gene.cyt1", 
+                     colors_use = viridis_light_high, na_color = "lightgray",
+                     min.cutoff = NA, max.cutoff = 2.0) + #, na_cutoff = NULL)
+  ggtitle("Cytotoxic | TDLN", subtitle = "GZMA, GZMB, GZMK, CX3CR1, FCGR3A, KLRG1") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+ccc<- FeaturePlot_scCustom(T8tum, features = "gene.cyt1", 
+                     colors_use = viridis_light_high, na_color = "lightgray",
+                     min.cutoff = NA, max.cutoff = 2.0) + #, na_cutoff = NULL)
+  ggtitle("Cytotoxic | Tumor", subtitle = "GZMA, GZMB, GZMK, CX3CR1, FCGR3A, KLRG1") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+
+plot(cc|ccc)
+```
+
+
+```{r exhaustion genes}
+
+# Select exhaustion genes
+gene.exh <- list(c('PDCD1', 'HAVCR2', 'CTLA4', 'TIGIT', 'ENTPD1', 'LAG3'))
+# AddModuleScore
+T8 <- AddModuleScore(object = T8, features = gene.exh, name = "gene.exh")
+T8LN <- AddModuleScore(object = T8LN, features = gene.exh, name = "gene.exh")
+T8tum <- AddModuleScore(object = T8tum, features = gene.exh, name = "gene.exh")
+
+d<- FeaturePlot_scCustom(T8, features = "gene.exh1", 
+                         colors_use = viridis_light_high, na_color = "lightgray") + #, na_cutoff = NULL)
+  ggtitle("Exhaustion", subtitle = "PDCD1, HAVCR2, CTLA4, TIGIT, ENTPD1, LAG3") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+dd<- FeaturePlot_scCustom(T8LN, features = "gene.exh1", 
+                          colors_use = viridis_light_high, na_color = "lightgray",
+                          min.cutoff = NA, max.cutoff = 1.8) + #, na_cutoff = NULL)
+  ggtitle("Exhaustion | TDLN", subtitle = "PDCD1, HAVCR2, CTLA4, TIGIT, ENTPD1, LAG3") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+ddd<- FeaturePlot_scCustom(T8tum, features = "gene.exh1", 
+                           colors_use = viridis_light_high, na_color = "lightgray",
+                           min.cutoff = NA, max.cutoff = 1.8) + #, na_cutoff = NULL)
+  ggtitle("Exhaustion | Tumor", subtitle = "PDCD1, HAVCR2, CTLA4, TIGIT, ENTPD1, LAG3") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('')
+
+
+plot(dd|ddd)
+
+```
+
+## Figure S3C clonal distribution proportion NEW
+```{r screpertoire v2}
+# bar plots per cluster per tissue
+clonalOccupy(T8LN, 
+             x.axis = "CD8.Cell.Types", 
+             proportion = F, 
+             label = F) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust=.8)) 
+
+clonalOccupy(T8tum, 
+             x.axis = "CD8.Cell.Types", 
+             proportion = F, 
+             label = F) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust=.8)) 
+
+```
+
+
+## Figure S3C clonal distribution proportion OLD
+```{r screpertoire v1}
+# bar plots per cluster per tissue
+occupiedscRepertoire(T8_LN, x.axis = "CD8.Cell.Types", label = FALSE) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust=.8)) +
+  NoLegend() +
+  ggtitle("TDLN") + ylim(0,4000) +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank())
+
+occupiedscRepertoire(T8_tumor, x.axis = "CD8.Cell.Types", label = F) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.9, hjust=.8)) + 
+  NoLegend() +
+  ggtitle("Tumor") + ylim(0,4000)+
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+
+```
+
+## Figure S3C3 - clonal distribution on UMAP
+```{r}
+## remove all NAs
+DimPlot(T8, group.by = "cloneType_2",
+        pt.size=0.5)
+  scale_color_manual(values = colorblind_vector(6), na.value="#e9e9e9") + 
+  ggtitle("distribution of clonotypes, shared & non-shared") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) + 
+  xlab('') +  ylab('') +
+  NoAxes()
+
+```
+
+
+### Fig S3E - stacked bar plots relative shared/locexp/NA cells in CD4 per patient
+``` {r}
+T4 <- readRDS("~/R/T4.harmony.rds")
+
+col_overlap <- c("Y" = "#EC5E27", "N" = "#403D39", "NA" = "grey")
+
+order <- c("Y", "N", "NA")
+
+md <- T8@meta.data
+# create a table with OVERLAP per cluster per patient and tissue
+cell_count <- unique(md$patient_true) %>%
+  map_dfr(function(p) {
+    md %>%
+      filter(patient_true == p) %>%
+      group_by(patient_true, overlap_2) %>% ## add tissue if split by tissue
+      summarise(n = n(), .groups = "drop_last") %>%
+      group_by(patient_true) %>%
+      mutate(percentage = n / sum(n) * 100) %>%
+      ungroup()
+  })
+
+# make a stacked bar chart of the proportion per patient tissue
+ggplot(cell_count, aes(x = patient_true, y = percentage, fill = factor(overlap_2, order))) + ## factor + order to adjust order
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = col_overlap) +
+ # facet_wrap(~ tissue) +
+  labs(
+    # title = "Distribution of cluster frequency per patient and tissue type",
+    x = "Patient",
+    y = "Percentage",
+    fill = "clonotype sharing"
+  ) +
+  theme_minimal()
+
+```
+

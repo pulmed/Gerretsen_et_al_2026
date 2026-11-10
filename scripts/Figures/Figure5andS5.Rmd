@@ -1,0 +1,903 @@
+---
+title: "Figure5"
+author: "V. Gerretsen"
+date: "2025-09-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r library}
+set.seed(42)
+library(Seurat)
+library(ggpubr)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(patchwork)
+library(scCustomize)
+library(scRepertoire)
+library(purrr)
+library(tidyverse)
+library(scuttle)
+library(pheatmap)
+library(scCustomize)
+
+library(ggrepel)
+library(Matrix)
+```
+
+## starting data
+
+You can also embed plots, for example:
+
+```{r load data, echo=FALSE}
+# load in data
+T8 <- readRDS("~/R/T8.rds")
+
+col_T8 = c(
+  "Tcentral mem(1)" =  "#edba40",
+  "Tearly act(1)" = "#e28c33",
+  "Teff(1)"  = "#e0652b",
+  "Tcentral mem(2)" = "#AED140",
+  "Tearly act(2)" =  "#2DA049",
+  "Teff(2)" = "#1D6517",
+  "Tlate act" = "#a9725A",
+  "Teff(3)" = "#009688",
+  "Tcytotoxic" =  "#00bcd4", 
+  "Texh(1)"= "#03a9f4" ,
+  "Texh(2)" = "#2196f3",
+  "Texh(3)" = "#3f51b5",
+  "Texh(4)" = "#673ab7" ,
+  "Tprolif" = "#9c27b0",
+  "Tmisc"= "#788176", 
+  "Tc17/MAIT" = "#f44336"
+) 
+
+col_route1 = "#ED7953FF"
+col_route2 = "darkgreen"
+
+
+```
+
+## CLR normalization of ADT
+```{r CLR}
+# 2) Re-run CLR to a new layer for inspection (non-destructive)
+T8 <- NormalizeData(
+  T8,
+  assay = "ADT",
+  normalization.method = "CLR",
+  margin = 2
+)
+```
+
+
+
+## Figure 5A1 - MA plot route 1 vs route 2 DEGs (RNAseq)
+```{r, MA plot}
+DefaultAssay(T8) <- "RNA"
+Idents(T8) <- "CD8.Cell.Types"
+ident1 <- c("Tearly act(1)", "Teff(1)")  # Replace with your cluster IDs
+ident2 <- c("Tearly act(2)", "Teff(2)")  # Replace with your cluster IDs
+
+# 1) Get markers with log2 fold change (M)
+## install presto devtools::install_github('immunogenomics/presto') for a more efficient implementation of wilcoxon rank sum test
+r1v2 <- FindMarkers(T8, 
+                    ident.1 = c("Tearly act(1)", "Teff(1)"),
+                    ident.2 = c("Tearly act(2)", "Teff(2)"), 
+                    min.pct = 0.25, 
+                    assay = 'RNA')
+
+# Detect logFC column name across Seurat versions
+lfc_col <- if ("avg_log2FC" %in% colnames(r1v2)) "avg_log2FC" else "avg_logFC"
+
+# Add gene names column for downstream merges/labels
+r1v2$gene <- rownames(r1v2)
+
+# 2) Build combined cell sets
+cells_g1 <- WhichCells(T8, idents = ident1)
+cells_g2 <- WhichCells(T8, idents = ident2)
+stopifnot(length(cells_g1) > 0, length(cells_g2) > 0)
+
+# 3) Get RNA transformed matrix (log1p-normalized in the 'data' layer in typical workflows)
+mat_data <- GetAssayData(T8, assay = "RNA", layer = "data")
+
+# 4) Group-wise means across cells (rowMeans)
+mu_g1 <- Matrix::rowMeans(mat_data[, cells_g1, drop = FALSE])
+mu_g2 <- Matrix::rowMeans(mat_data[, cells_g2, drop = FALSE])
+
+# 5) Assemble A (average of group means on the log1p scale) and merge with M
+A_df <- data.frame(gene = names(mu_g1), A = 0.5 * (mu_g1 + mu_g2))
+ma_df <- r1v2 %>%
+  select(gene, M = all_of(lfc_col), p_val, p_val_adj) %>%
+  inner_join(A_df, by = "gene")
+
+# 6) Significance and single categorical color assignment
+# Typical RNA thresholds; tweak to taste
+fc_thresh <- 0.6   # e.g., |log2FC| >= 1
+padj_thresh <- 0.05
+
+ma_df <- ma_df %>%
+  mutate(
+    sig = p_val_adj < padj_thresh & abs(M) >= fc_thresh,
+    color_group = case_when(
+      sig & M > 0 ~ "ident1_sig",   # significant and up in ident1
+      sig & M < 0 ~ "ident2_sig",   # significant and up in ident2
+      TRUE        ~ "non_sig"       # all non-significant
+    )
+  )
+
+
+# 7) Choose which significant features to label
+# Label all significant features (you can cap per group if needed)
+# Optional: cap labels per group (uncomment if plot is too busy)
+label_df <- bind_rows(
+   ma_df %>% filter(color_group == "ident1_sig") %>% arrange(desc(abs(M))) %>% dplyr::slice(1:15),
+   ma_df %>% filter(color_group == "ident2_sig") %>% arrange(desc(abs(M))) %>% dplyr::slice(1:15)
+)
+
+# 8) Define colors: green for ident1_sig, orange for ident2_sig, grey for non_sig
+cols <- c(
+  ident1_sig = "#ED7953FF",  # green
+  ident2_sig = "darkgreen",  # orange
+  non_sig    = "grey70"    # grey
+)
+
+ggplot(ma_df, aes(x = A, y = M)) +
+  # Points colored by single categorical scheme
+  geom_point(aes(color = color_group), alpha = 0.7, size = 1.8) +
+#  geom_hline(yintercept = 0, linetype = "dashed") +
+  # Labels colored by the same categorical scheme
+  ggrepel::geom_text_repel(
+    data = label_df,
+    aes(label = gene, color = color_group),
+    size = 4,
+    box.padding = 0.3,
+    max.overlaps = Inf,
+    seed = 123
+  ) +
+  scale_color_manual(
+    values = cols,
+    breaks = c("ident1_sig", "ident2_sig", "non_sig"),
+    labels = c("Up in route 1", "Up in route 2", "Non-significant"),
+    name = NULL
+  ) +
+  labs(
+    title = paste0("RNA MA Plot: ", paste(ident1, collapse = "+"), " vs ", paste(ident2, collapse = "+")),
+    x = "A (Average RNA expression across routes)", #, log1p scale)",
+    y = paste0("M (", lfc_col, ") ") #from FindMarkers, RNA)")
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  scale_x_reverse() +
+  scale_y_continuous(limits = c(-4, 4))
+
+
+```
+
+## Figure 5A2 - MA plot route 1 vs route 2 DEPs (CITEseq)
+```{r, MA plot}
+Idents(T8) <- "CD8.Cell.Types"
+ident1 <- c("Tearly act(1)", "Teff(1)")  # Replace with your cluster IDs
+ident2 <- c("Tearly act(2)", "Teff(2)")  # Replace with your cluster IDs
+
+# 1) Get markers with log2 fold change (M)
+r1v2 <- FindMarkers(T8, 
+                    ident.1 = c("Tearly act(1)", "Teff(1)"),
+                    ident.2 = c("Tearly act(2)", "Teff(2)"), 
+                    min.pct = 0.25, 
+                    assay = 'ADT')
+
+# Detect logFC column name across Seurat versions
+lfc_col <- if ("avg_log2FC" %in% colnames(r1v2)) "avg_log2FC" else "avg_logFC"
+
+# Add feature names column for downstream merges/labels
+r1v2$feature <- rownames(r1v2)
+
+# 2) Build combined cell sets
+cells_g1 <- WhichCells(T8, idents = ident1)
+cells_g2 <- WhichCells(T8, idents = ident2)
+stopifnot(length(cells_g1) > 0, length(cells_g2) > 0)
+
+# 3) Get ADT transformed matrix (CLR-normalized in `data` slot)
+mat_data <- GetAssayData(T8, assay = "ADT")
+
+# 4) Group-wise means across cells (rowMeans)
+mu_g1 <- Matrix::rowMeans(mat_data[, cells_g1, drop = FALSE])
+mu_g2 <- Matrix::rowMeans(mat_data[, cells_g2, drop = FALSE])
+
+# 5) Assemble A and merge with M
+A_df <- data.frame(feature = names(mu_g1), A = 0.5 * (mu_g1 + mu_g2))
+
+ma_df <- r1v2 %>%
+  select(feature, M = all_of(lfc_col), p_val, p_val_adj) %>%
+  inner_join(A_df, by = "feature")
+
+# 6) Significance and single categorical color assignment
+# Adjust thresholds to your data; ADT often benefits from smaller FC thresholds (e.g., 0.25–0.5)
+fc_thresh <- 0.25
+ma_df <- ma_df %>%
+  mutate(
+    sig = p_val_adj < 0.05 & abs(M) >= fc_thresh,
+    color_group = case_when(
+      sig & M > 0 ~ "ident1_sig",   # significant and up in ident1
+      sig & M < 0 ~ "ident2_sig",   # significant and up in ident2
+      TRUE        ~ "non_sig"       # all non-significant, regardless of M
+    )
+  )
+
+# 7) Choose which significant features to label
+# Label all significant features (you can cap per group if needed)
+label_df <- ma_df %>% filter(color_group != "non_sig")
+
+# Optional: cap labels per group (uncomment if plot is too busy)
+# label_df <- bind_rows(
+#   ma_df %>% filter(color_group == "ident1_sig") %>% arrange(desc(abs(M))) %>% slice(15),
+#   ma_df %>% filter(color_group == "ident2_sig") %>% arrange(desc(abs(M))) %>% slice(15)
+# )
+
+# 8) Define colors: green for ident1_sig, orange for ident2_sig, grey for non_sig
+cols <- c(
+  ident1_sig = "#ED7953FF",  # green
+  ident2_sig = "darkgreen",  # orange
+  non_sig    = "grey70"    # grey
+)
+
+ggplot(ma_df, aes(x = A, y = M)) +
+  # Points colored by single categorical scheme
+  geom_point(aes(color = color_group), alpha = 0.7, size = 1.8) +
+  #geom_hline(yintercept = 0, col = "gray", linetype = 'dashed') +
+  # Labels colored by the same categorical scheme
+  ggrepel::geom_text_repel(
+    data = label_df,
+    aes(label = feature, color = color_group),
+    size = 4,
+    box.padding = 0.3,
+    max.overlaps = Inf,
+    seed = 123
+  ) +
+  scale_color_manual(
+    values = cols,
+    breaks = c("ident1_sig", "ident2_sig", "non_sig"),
+    labels = c("Up in route 1", "Up in route 2", "Non-significant"),
+    name = NULL
+  ) +
+  labs(
+    title = paste0("ADT MA Plot: ", paste(ident1, collapse = "+"), " vs ", paste(ident2, collapse = "+")),
+    x = "A (Average ADT expression across routes)", ## combined groups, CLR scale)",
+    y = paste0("M (",lfc_col,")")  # from FindMarkers, ADT
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  scale_y_continuous(limits = c(-1.5, 1.5))
+
+## NB. cut-off log2FC is >0.25 here
+```
+
+
+## Figure 5B - heatmap selected genes route 1 vs route 2 clusters
+```{r}
+
+# subset route 1 and route 2 clusters
+T8routes <- subset(T8, idents = c("Tearly act(1)", "Teff(1)","Tearly act(2)", "Teff(2)"))
+T8routes$CD8.Cell.Types <- factor(mapvalues(T8routes$CD8.Cell.Types,
+                                      from = c("Tearly act(1)" , "Tearly act(2)", "Teff(1)"  ,"Teff(2)"),
+                                           
+                                      to = c("Tearly act(1)" , "Tearly act(2)", "Teff(1)"  ,"Teff(2)")),
+                            levels = c("Tearly act(1)", "Teff(1)","Tearly act(2)", "Teff(2)")
+)
+
+## selection of DEGs specific for route 1 or route 2 clustes, or more early act or eff genes
+genes <- c("ZNF683", "LTB", "CISH",  "CXCR3","KLRC1", "KLRD1", "XCL1", "HOPX", "ITGAE","IL7R",
+           "NFKBIA", "NFKBIZ", "TNFAIP3", "ANXA1", 
+           "KLRG1", "EOMES", "PLEK", "NKG7", "HLA-DPA1", "GZMA", "CMC1", 
+           "GZMK", "TNFSF9", "KLF2", "CXCR4", "CCL4")
+
+
+
+# Single cell heatmap of feature expression
+T8routes <- ScaleData(T8routes, features = genes)
+
+# Calculate average expression per cluster
+avg_expr <- AggregateExpression(object = T8routes, group.by = "CD8.Cell.Types") 
+#avg_expr <- AggregateExpression(object = T8, group.by = "CD8.Cell.Types")
+
+# Extract the expression matrix
+avg_expr_matrix <- avg_expr$RNA
+
+# Extract normalized counts for the genes of interest
+normalized_counts <- T8routes@assays$RNA@counts[rownames(T8routes@assays$RNA@counts) %in% genes, ]
+
+# subset_matrix contains the expression values for allgenes per cluster
+subset_matrix <- avg_expr_matrix[rownames(avg_expr_matrix) %in% genes, ]
+
+# order rows
+row_names <- rownames(avg_expr_matrix)
+
+# Determine order based on 'genes'
+ordered_indices <- order(match(row_names, genes))
+
+# Reassign ordered row names
+subset_matrix <- avg_expr_matrix[ordered_indices, ]
+subset_matrix <- subset_matrix[rownames(subset_matrix) %in% genes, ]
+
+### scale with z-score
+cal_z_score <- function(x){
+  (x - mean(x)) / sd(x)
+}
+
+data_subset_norm <- t(apply(subset_matrix, 1, cal_z_score))
+
+# create heatmap
+pheatmap(data_subset_norm,
+         #color = hcl.colors(50, "RdGy", rev = T),
+         #order_color = NA,
+         cutree_rows = F,
+         cellwidth = 18,
+         cluster_rows = F,
+         cluster_cols = F,
+         main = "route 1 vs. route 2")
+
+
+```
+
+
+## Figure 5C1 - Featureplots with gene expression following pattern route 1 vs route 2
+```{r}
+##
+col_route1 = "#ED7953FF"
+col_route2 = "darkgreen"
+
+FeaturePlot(T8, "KLRC1", cols = c("lightgrey", "#ED7953FF"), pt.size = 1, order = T) + NoAxes()
+FeaturePlot(T8, "ZNF683", cols = c("lightgrey", "#ED7953FF"), pt.size = 1, order = T) + NoAxes()
+FeaturePlot(T8, "ITGAE", cols = c("lightgrey", "#ED7953FF"), pt.size = 1, order = T) + NoAxes()
+
+FeaturePlot(T8, "GZMK", cols = c("lightgrey", "darkgreen"), pt.size = 1, order = F) + NoAxes()
+FeaturePlot(T8, "TNFSF9", cols = c("lightgrey", "darkgreen"), pt.size = 1, order = T) + NoAxes()
+FeaturePlot(T8, "KLRG1", cols = c("lightgrey", "darkgreen"), pt.size = 1, order = T) + NoAxes()
+
+
+```
+
+## Figure 5C2 - CITEseq featureplots with protein expression following pattern route 1 vs route 2
+```{r}
+FeaturePlot(T8, "adt_CD103", cols = c("lightgrey", "#AE4204"), pt.size = 1, order=T) + NoAxes()
+FeaturePlot(T8, "adt_KLRG1.1", cols = c("lightgrey", "#1C4220"), pt.size = 1, order = T) + NoAxes()
+```
+
+
+## Figure 5D - TRM signature - related to route 1 clusters and exhausted clusters
+```{r Trm signature}
+
+# T resident memory gene set by Clarke et al.
+trm_set <- list(c("ITGAE",             #"GSG2",
+                  "MYO7A",             "GPR25",             "KRT86",             "SPRY1",
+                  "CLNK",             "SRGAP3",             "ATP8B4",             "AFAP1L2",
+                  "KLRC1",             "ETV1",             "GOLIM4",             "DOCK5",
+                  "ZNF683",             "CTLA4",             "DAPK2",             "CHN1",
+                  "PHLDA1",             "SARDH",             "ARHGAP11A",             "KIF5C",
+                  "TMIGD2",            # "DFNB31",            # "KIAA0101",
+                  "UAP1L1",             "RBPJ",             #"C15orf53",
+                  "PDCD1",             "MIR155HG",             "INPP5F",             "PTMS",
+                  "TMEM200A",             "PGLYRP2",             "MKI67",             "ATP10D",
+                  "AHI1",             "XCL1",             "XYLT1",             "SLC27A2",             "IVNS1ABP",
+                  "CXCR6",             "ATL2",             "CD226",            # "AMICA1",
+                  "ITGA1",             "PDE4A",             "CAPG",             "ACSL4",             "ADAM19"
+))
+
+T8 <- AddModuleScore(T8, features = trm_set, assay = "RNA", name = "trm_set")
+FeaturePlot_scCustom(T8, features = "trm_set1", 
+                     split.by = "tissue",
+                     colors_use = viridis_light_high, na_color = "lightgray") 
+
+```
+
+
+## Figure 5E - CD39 distinghuishes CD103+ non-exh from exhausted
+```{r}
+FeaturePlot(T8, "ENTPD1", cols = c("lightgrey", "#1570AC")) + NoAxes()
+FeaturePlot(T8, "adt_CD39", cols = c("lightgrey", "#2C4971")) + NoAxes()
+```
+
+
+## Figure 5F - experimental setup (BioRender) and gating strategy (flowjo)
+
+
+## Figure 5G - populations in NSCLC and TDLN (GraphPad, flowjo)
+
+
+## Figure 5H - populations in HNSCC and melanoma (Grpahpad, flowjo)
+
+## Figure 5I - flow cytometry on CD39 and CD103 expression (Graphpad, flowjo)
+
+## Figure 5K - flow plots (flowjo)
+
+
+# SUPPLEMENTARY FIGURE 5
+
+## Figure S5A - tumor specificity
+```{r}
+### tumor-specific (vs virusspecific) in NSCLCL by Komuro et al. (NSCLC TIL n=140 vs virus n=19)
+Ttum_set <- list(c("CTLA4",
+                   "CXCL13",
+                   "NAB1",
+                   "RBPJ", 
+                   "DUSP4",
+                   "HLA-DRB1",
+                   "ALOX5AP",
+                   "ITGAE",
+                   "ENTPD1",
+                   "CHN1",
+                   "NR3C1",
+                   "CTSD",
+                   "TNFRSF9",
+                   "CD7",
+                   "TIGIT"))
+T8 <- AddModuleScore(T8, features = Ttum_set, assay = "RNA", name = "Ttum_set")
+FeaturePlot_scCustom(T8, features = "Ttum_set1", 
+                     #split.by = "tissue",
+                     colors_use = viridis_light_high, na_color = "lightgray") + 
+  ggtitle("tumor specific - Komuro et al.")
+
+
+#### mutation associated neoantigens (MANA, Caushi et al.)
+## MANA vs Inf and EBV
+MANA_set <- list(c("CXCL13",
+                   "GNLY",
+                   "GEM",
+                   "ENTPD1",
+                   "TNS3",
+                   "LINC02195",
+                   "GNA15",
+                   "MIR4435-2HG",
+                   "BATF",
+                   "RBPJ",
+                   "GBP5",
+                   "ITGAE",
+                   "GPR25",
+                   "CKLF",
+                   "MSC",
+                   "TIFA",
+                   "CHN1",
+                   "SOX4", ### 0.75
+                   "MIR155HG",
+                   "GBP1",
+                   "ADAM19",
+                   "TSC22D1",
+                   "CTLA4",
+                   "DNPH1",
+                   "AL157402.2",
+                   "STAT1",
+                   "ACP5",
+                   "ZNRF1",
+                   "GADD45G",
+                   "CD38",
+                   "PLSCR1",
+                   "HLA-DRA",
+                   "MYO7A",
+                   "CYTOR",
+                   "GBP2",
+                   "LINC01943",
+                   "MAST4",
+                   "ZNF683",
+                   "FASLG",
+                   "ETV7",
+                   "ANKRD28")) # 41 genes
+                 
+T8 <- AddModuleScore(T8, features = MANA_set, assay = "RNA", name = "MANA_set")
+FeaturePlot_scCustom(T8, features = "MANA_set1", 
+                    # split.by = "tissue",
+                     colors_use = viridis_light_high, na_color = "lightgray") +
+  ggtitle("tumor specific - Caushi et al.")
+
+InfA_set <- list(c("IL7R",
+              #"GPR183",
+              #"GPR15",
+              #"PTGER2",
+              "KLRC1",
+            #  "ARL4A",
+             # "NUDT11",
+            #  "CCND3",
+             # "RARA",
+            #  "CLDND1",
+            #  "FCMR",
+              "KLF3",
+              "DYNLT3",
+              "SMIM3",
+              "LYAR",
+              "CCR7",
+              "SYPL1") # 8 genes
+)
+####, cutoff 0.6
+              "PBXIP1",
+              "CD28",
+              "ARL4C",
+              "SORL1",
+              "P2RY8",
+              "PHF1",
+              "YPEL5",
+              "PLAC8",
+              "SPART",
+              "MYBL1",
+              "ODF2L",
+              "PTGER4",
+              "FTH1",
+              "GABARAPL1",
+              "IFNGR1",
+              "ZBTB16",
+              "AC245014.3",
+              "AHNAK",
+              "ANK3",
+              "BACH2",
+              "RGCC",
+              "RASA3",
+              "SRSF5",
+              "IDS",
+              "KCNA3",
+              "PIK3R1",
+              "ZNF831",
+              "TTC39C",
+              "AUTS2",
+              "XCL1",
+              "PABPC1",
+              "HNRNPA0",
+              "ALG13",
+              "ATP2B1",
+              "RASGRP2",
+              "CDK17",
+              "RASGEF1B",
+              "FXYD5",
+              "AC020916.1",
+              "MCUB",
+              "NLRP6",
+              "FAM118A",
+              "TSC22D3",
+              "DSE",
+              "CCR6",
+              "ATP2B1-AS1",
+              "CD44",
+              "SORBS3",
+              "BEX2",
+              "SLC2A3",
+              "C16orf54",
+              "PER1",
+              "THEM4",
+              "PRNP",
+              "RBMS1",
+              "GFPT2",
+              "SPINT2",
+              "SLC39A8",
+              "SSBP2",
+              "TCF7",
+              "SESN1",
+              "KCTD20",
+              "FOXP1",
+              "HOXB2",
+              "SPRY1",
+              "USP36",
+              "DHCR7",
+              "CYTH1",
+              "PPP1CB",
+              "CAMK4",
+              "ANTXR2",
+              "EEF1B2",
+              "EIF4B",
+              "EPB41",
+              "LEPROTL1",
+              "ICAM2",
+              "RBMX", 
+            "PBX4",
+            "CDKN1B",
+            "STAT4",
+            "BCL2",
+            "SYTL3",
+            "PARP8",
+            "ABLIM1",
+            "AP002387.2",
+            "TENT5C",
+            "WHRN",
+            "FLT3LG",
+            "AC016831.7",
+            "TUBA1B",
+            "FXYD7",
+            "NR1H2", 
+            "SYTL2") # CUTOFF BIJ 0.35 LOG2FC
+
+T8 <- AddModuleScore(T8, features = InfA_set, assay = "RNA", name = "InfA_set")
+FeaturePlot(object = T8, features = "InfA_set1")  
+FeaturePlot_scCustom(T8, features = "InfA_set1", 
+                     #split.by = "tissue",
+                     colors_use = viridis_magma_dark_high, na_color = "lightgray")
+
+
+
+## EBV related genes in Caushi paper
+EBV_set <- list(c("GZMK",
+             "ENC1",
+"LITAF",
+"CMC1",
+"AUTS2",
+"ITM2C",
+"APMAP",
+"CST7",
+"BIK",
+"GZMH",
+"OASL",
+"TERF1",
+"PIK3R1",
+#"SRSF2V",
+#"RUNX3V",
+"NKG7",
+"LGALS1") # 15 genes
+)
+#####, cut=off 0.6
+"CSNK1D",
+"HIST1H1E",
+"AC004687.1",
+"APBA2",
+"METRNL",
+"GGA2",
+"VPS37B",
+"PLEKHA2",
+"CREM",
+"HLA-DQA2",
+"LYST",
+"PIK3AP1",
+"AKNA",
+"MATK",
+"KLRG1",
+"JPT1",
+"HCG18",
+"PPP1R16B",
+"STMN1",
+"TMEM39A",
+"SH2D1A",
+"BANP",
+"CEMIP2",
+"GALNT11",
+"ARL6IP1",
+"U2AF1",
+"ATP1B3",
+"VCAM1",
+"TENT5C",
+"LPCAT1",
+"RASA3",
+"EOMES",
+"NOP56",
+"WDR74",
+"DUSP4",
+"DKK3",
+"USP11",
+"ITGB2",
+"HLA-DQA1",
+"NKAP",
+"HLA-DPB1",
+"RNF125",
+"PITHD1",
+"KLRC1",
+"SMAD7",
+"CNN2",
+"PNPLA2",
+"SIRT2",
+"CTU2",
+"RAB5IF",
+"SLC25A4",
+"CCL4",
+"IGFBP3",
+"LMNB1",
+"ATP6V0C",
+"ARL4D",
+"PDE4A",
+"OAT",
+"LDHA",
+"CALM1",
+"MARCKSL1",
+"RANBP2",
+"AOAH",
+"FAM177A1",
+"SLA2",
+"POLR2A",
+"TNFRSF1B",
+"NXF1",
+"CD8B",
+"ZNF331",
+"ATP6V0D1",
+"RBM38",
+"NASP",
+"POLE3",
+"TERF2IP",
+"LUC7L3",
+"CENPF",
+"CTSW",
+"APOBEC3H",
+"TXLNG",
+"NOP16",
+"ABCG1",
+"SNAI1",
+"PPP2R5C",
+"PPP1R10",
+"POLR3E",
+"WIPI2",
+"AKIRIN1",
+"LGR6",
+"IMPDH2",
+"IQCN") ###, TOT 0.35 CUT-OFF
+#####
+"APLP2",
+"SRSF3",
+"SYTL3",
+"DHX36",
+"JOSD1",
+"TFAM",
+"EPHA4",
+"SAFB2",
+"GZMM",
+"CCDC59",
+"OAZ1",
+"HIST1H1D",
+"MAEA",
+"YTHDC1",
+"RILPL2",
+"AIF1",
+"ETV3",
+"PDCL3",
+"SRRT",
+"AKAP13",
+"DTHD1",
+"TBCC",
+"LRRC41",
+"MAGOH",
+"FAM32A",
+"ISG20",
+"IQGAP2",
+"STX5",
+"NDRG1",
+"DUSP14",
+"ZNF184",
+"LBH",
+"OSBPL8",
+"TGFB1",
+"ATG2A",
+"C9orf78",
+"CCND2",
+"PITPNC1",
+"TENT4B",
+"KIF13B",
+"PDE7A",
+"HERPUD2",
+"BLVRB",
+#"BOLA2-SMG1P6",
+"CCDC86",
+"FAM49A",
+"TGFBR3",
+"MAT2A",
+"RALGAPA1",
+"LPIN1",
+"ANKRD13C",
+"SKI",
+"PDGFD",
+"SC5D",
+"EMB",
+"ABLIM1",
+"NR1D2",
+"DDX49",
+"PLEKHB2",
+"LUC7L",
+#"NCBP2-AS2",
+"SUPT4H1",
+"PCF11",
+"BCL11B",
+"STARD7",
+"CDKN2AIP",
+"YPEL5",
+"SNRPB",
+"SLBP",
+"DDX18",
+"RAC1",
+"NAA50",
+"CNOT2",
+"C1orf21",
+"NARF",
+"GYPC",
+"CALM2",
+"LYAR",
+"EHD1",
+"ETF1",
+"PDRG1",
+#"FOSL2V",
+"ITM2A",
+"SIVA1",
+"SLC38A1",
+"BUD23",
+"MANF",
+"MAPK1",
+"ISCA1",
+"GCLM",
+"DDX24",
+"ILF2",
+"NCL",
+"SPTAN1",
+"ATG16L1",
+"DYNLL1",
+"ZBTB38",
+"GUK1",
+"RCE1",
+"GFPT2",
+"FBXO34",
+"TC2N",
+"EMC3",
+"PTBP1",
+"CPNE1",
+"Z93241.1",
+"PLEK",
+"TLE4",
+"PPM1K",
+#"FP671120.3",
+"TSN",
+"PLCG2",
+"MCOLN2",
+"EIF5B",
+"SRGN",
+"CCL3",
+"TOR1B",
+"PSPC1",
+"ZC3H13",
+"CD81",
+"SURF2",
+"AL121944.1",
+"CYTH1",
+"FAM210A",
+"EMD",
+"C1orf35",
+"ZC3H18",
+"PRR5L",
+"SLC9A3R1",
+"POR",
+"ISG20L2",
+"AHI1",
+"PGD",
+"CEBPZ",
+"ST3GAL1",
+"CCNT1",
+"FBL",
+"SLFN11",
+"CBWD1",
+"CHKA",
+"SLC16A3",
+"AAMP",
+"SEC62",
+"POLR1C",
+"CMIP",
+"RBM14",
+"PSMA7"
+)
+
+T8 <- AddModuleScore(T8, features = EBV_set, assay = "RNA", name = "EBV_set")
+FeaturePlot(object = T8, features = "EBV_set1")             
+FeaturePlot_scCustom(T8, features = "EBV_set1", 
+                     split.by = "tissue",
+                     colors_use = viridis_magma_dark_high, na_color = "lightgray")
+T8_tumor <- AddModuleScore(T8_tumor, features = EBV_set, assay = "RNA", name = "EBV_set")
+c <- FeaturePlot_scCustom(T8_tumor, features = "EBV_set1", 
+                     #split.by = "tissue",
+                     colors_use = viridis_magma_dark_high, na_color = "lightgray")
+ 
+
+```
+
+
+
+## Fig S5B - expression pattern by routes
+### expression by flow cytrometry (Graphpad, flowjo)
+
+## Figure S5C - individual expression of sorted populations per tumor type per patient
+### (graphpad, flowjo)
